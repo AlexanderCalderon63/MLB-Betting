@@ -72,13 +72,14 @@ _pitcher_stats_cache: dict = {}
 
 # ── Public API ─────────────────────────────────────────────────────────────────
 
-def build_and_store_season(season: int, min_games: int = MIN_GAMES_PLAYED) -> int:
+def build_and_store_season(season: int, min_games: int = MIN_GAMES_PLAYED, start_date: str = None) -> int:
     """
-    Fetch all completed regular season games for `season`, build feature vectors
+    Fetch completed regular season games for `season`, build feature vectors
     (including pitcher features for 2023+), and store in historical_games.
+    If start_date (YYYY-MM-DD) is given, only games on or after that date are fetched.
     Returns the number of rows inserted.
     """
-    games = _fetch_season_schedule(season)
+    games = _fetch_season_schedule(season, start_date=start_date)
     if not games:
         print(f"[HIST] No completed games found for {season}")
         return 0
@@ -433,24 +434,24 @@ def load_training_data(min_season: int = 2023) -> tuple:
 def get_historical_summary() -> dict:
     """Return per-season game count from the historical_games table."""
     conn = get_connection()
-    c = conn.cursor()
-    c.execute("""
+    rows = conn.execute("""
         SELECT season, COUNT(*) as games
         FROM historical_games
         GROUP BY season
         ORDER BY season
-    """)
-    rows = c.fetchall()
+    """).fetchall()
     conn.close()
     return {row["season"]: row["games"] for row in rows}
 
 
 # ── Schedule fetch ─────────────────────────────────────────────────────────────
 
-def _fetch_season_schedule(season: int) -> list:
+def _fetch_season_schedule(season: int, start_date: str = None) -> list:
     """Return all Final regular season games for a season, including game_pk."""
     url = f"{BASE}/schedule"
     params = {"sportId": 1, "season": season, "gameType": "R"}
+    if start_date:
+        params["startDate"] = start_date
 
     try:
         resp = _get(url, params)
@@ -648,7 +649,7 @@ def _save_to_db(rows: list) -> None:
         try:
             c.execute(
                 """
-                INSERT OR IGNORE INTO historical_games (
+                INSERT INTO historical_games (
                     game_date, season, home_team, away_team,
                     home_score, away_score, home_win,
                     win_pct_diff, pythag_diff, run_diff_diff,
@@ -663,6 +664,7 @@ def _save_to_db(rows: list) -> None:
                     :home_sp_era, :home_sp_whip, :home_sp_k9, :home_sp_bb9,
                     :away_sp_era, :away_sp_whip, :away_sp_k9, :away_sp_bb9
                 )
+                ON CONFLICT (game_date, home_team, away_team) DO NOTHING
                 """,
                 row,
             )
