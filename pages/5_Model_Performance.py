@@ -172,8 +172,8 @@ paper_training_count = 0
 pitcher_coverage = {}
 try:
     paper_training_count = conn.execute(
-        "SELECT COUNT(*) FROM paper_bets WHERE outcome IN ('Win','Loss') AND win_pct_diff IS NOT NULL"
-    ).fetchone()[0]
+        "SELECT COUNT(*) as cnt FROM paper_bets WHERE outcome IN ('Win','Loss') AND win_pct_diff IS NOT NULL"
+    ).fetchone()["cnt"]
     rows = conn.execute("""
         SELECT season,
                COUNT(*) as total,
@@ -181,7 +181,7 @@ try:
         FROM historical_games GROUP BY season
     """).fetchall()
     for row in rows:
-        pitcher_coverage[int(row[0])] = (int(row[1]), int(row[2]))
+        pitcher_coverage[int(row["season"])] = (int(row["total"]), int(row["with_pitcher"]))
 except Exception:
     pass
 conn.close()
@@ -275,9 +275,21 @@ if "retrain_msg" in st.session_state:
     else:
         st.error(msg_text)
 
-if st.button("🔄 Fetch 2026 Games & Retrain", type="primary"):
+_conn_last = get_connection()
+_last_date_row = _conn_last.execute(
+    "SELECT MAX(game_date) as last_date FROM historical_games WHERE season = 2026"
+).fetchone()
+_conn_last.close()
+_last_2026_date = _last_date_row["last_date"] if _last_date_row else None
+_btn_label = (
+    f"🔄 Fetch 2026 Games since {_last_2026_date} & Retrain"
+    if _last_2026_date
+    else "🔄 Fetch 2026 Games & Retrain"
+)
+
+if st.button(_btn_label, type="primary"):
     with st.spinner("Fetching completed 2026 games and retraining model..."):
-        new_games = build_and_store_season(2026)
+        new_games = build_and_store_season(2026, start_date=_last_2026_date)
         fresh = MLBPredictor()
         success = fresh.load_and_train()
     if success:

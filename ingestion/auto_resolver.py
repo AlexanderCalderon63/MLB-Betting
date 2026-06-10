@@ -340,7 +340,7 @@ def refresh_closing_odds(dates: list) -> dict:
                             home_closing_odds  = excluded.home_closing_odds,
                             away_closing_odds  = excluded.away_closing_odds,
                             bookmaker          = excluded.bookmaker,
-                            fetched_at         = datetime('now')
+                            fetched_at         = NOW()::TEXT
                     """, (game_date, h_name, a_name, ct, home_odds, away_odds, bookmaker))
                     games_cached += 1
                 except Exception as e:
