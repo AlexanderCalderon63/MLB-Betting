@@ -63,6 +63,31 @@ if bets_raw.empty:
     st.info("No bets logged yet. Use the form above to start tracking.")
     st.stop()
 
+# --- Delete a Bet ---
+with st.expander("🗑️ Delete a Bet", expanded=False):
+    options = {
+        row["id"]: (
+            f"{row['game_date']} — {row['away_team']} @ {row['home_team']} — "
+            f"Bet: {row['bet_on']} @ {'+' if int(row['odds']) > 0 else ''}{int(row['odds'])}"
+            + (f" — {row['outcome']}" if row["outcome"] else "")
+        )
+        for _, row in bets_raw.iterrows()
+    }
+    del_id = st.selectbox(
+        "Select a bet to delete",
+        options=list(options.keys()),
+        format_func=lambda i: options[i],
+        key="del_bet_id",
+    )
+    confirm = st.checkbox("I'm sure I want to permanently delete this bet", key="del_bet_confirm")
+    if st.button("🗑️ Delete Bet", type="primary", disabled=not confirm, key="del_bet_btn"):
+        conn_del = get_connection()
+        conn_del.execute("DELETE FROM bets WHERE id = ?", (int(del_id),))
+        conn_del.commit()
+        conn_del.close()
+        st.success("Bet deleted.")
+        st.rerun()
+
 # --- Refresh Closing Odds Cache ---
 with st.expander("📥 Refresh Closing Odds", expanded=False):
     st.caption(

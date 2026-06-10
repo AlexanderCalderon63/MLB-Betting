@@ -71,6 +71,31 @@ if bets_raw.empty:
     st.info("No paper bets logged yet. Use the Bet Sizing page to quickly log paper bets for all today's games.")
     st.stop()
 
+# --- Delete a Paper Bet ---
+with st.expander("🗑️ Delete a Paper Bet", expanded=False):
+    options = {
+        row["id"]: (
+            f"{row['game_date']} — {row['away_team']} @ {row['home_team']} — "
+            f"Bet: {row['bet_on']} @ {'+' if int(row['odds']) > 0 else ''}{int(row['odds'])}"
+            + (f" — {row['outcome']}" if row["outcome"] else "")
+        )
+        for _, row in bets_raw.iterrows()
+    }
+    del_id = st.selectbox(
+        "Select a paper bet to delete",
+        options=list(options.keys()),
+        format_func=lambda i: options[i],
+        key="del_paper_bet_id",
+    )
+    confirm = st.checkbox("I'm sure I want to permanently delete this paper bet", key="del_paper_bet_confirm")
+    if st.button("🗑️ Delete Paper Bet", type="primary", disabled=not confirm, key="del_paper_bet_btn"):
+        conn_del = get_connection()
+        conn_del.execute("DELETE FROM paper_bets WHERE id = ?", (int(del_id),))
+        conn_del.commit()
+        conn_del.close()
+        st.success("Paper bet deleted.")
+        st.rerun()
+
 # --- Refresh Closing Odds Cache ---
 with st.expander("📥 Refresh Closing Odds", expanded=False):
     st.caption(
