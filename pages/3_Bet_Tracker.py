@@ -17,7 +17,7 @@ from theme import init_theme, palette
 init_db()
 
 st.set_page_config(page_title="Bet Tracker", page_icon="📒", layout="wide")
-init_theme()
+init_theme("#7c3aed")   # violet — bet tracker
 
 st.title("📒 Bet Tracker")
 st.caption("Log your bets, track ROI, and measure Closing Line Value to validate your edge")
@@ -292,23 +292,23 @@ if not completed.empty:
 <div style="display:flex; gap:12px; margin-bottom:1.5rem; flex-wrap:wrap;">
   <div class="stat-box" style="flex:1; min-width:110px;">
     <div style="font-size:0.72rem; color:{_c['muted']}; font-weight:600; text-transform:uppercase; letter-spacing:0.07em; margin-bottom:6px;">Total Bets</div>
-    <div style="font-size:2rem; font-weight:800; font-family:'Syne',sans-serif; color:{_c['text']};">{n_bets}</div>
+    <div style="font-size:2rem; font-weight:800; font-family:'Manrope',sans-serif; color:{_c['text']};">{n_bets}</div>
   </div>
   <div class="stat-box" style="flex:1; min-width:110px;">
     <div style="font-size:0.72rem; color:{_c['muted']}; font-weight:600; text-transform:uppercase; letter-spacing:0.07em; margin-bottom:6px;">Win Rate</div>
-    <div style="font-size:2rem; font-weight:800; font-family:'Syne',sans-serif; color:{_c['text']};">{win_rate:.1f}%</div>
+    <div style="font-size:2rem; font-weight:800; font-family:'Manrope',sans-serif; color:{_c['text']};">{win_rate:.1f}%</div>
   </div>
   <div class="stat-box" style="flex:1; min-width:110px;">
     <div style="font-size:0.72rem; color:{_c['muted']}; font-weight:600; text-transform:uppercase; letter-spacing:0.07em; margin-bottom:6px;">ROI</div>
-    <div style="font-size:2rem; font-weight:800; font-family:'Syne',sans-serif; color:{roi_color};">{roi:+.1f}%</div>
+    <div style="font-size:2rem; font-weight:800; font-family:'Manrope',sans-serif; color:{roi_color};">{roi:+.1f}%</div>
   </div>
   <div class="stat-box" style="flex:1; min-width:110px;">
     <div style="font-size:0.72rem; color:{_c['muted']}; font-weight:600; text-transform:uppercase; letter-spacing:0.07em; margin-bottom:6px;">Total P&amp;L</div>
-    <div style="font-size:2rem; font-weight:800; font-family:'Syne',sans-serif; color:{pnl_color};">${total_pnl:+.2f}</div>
+    <div style="font-size:2rem; font-weight:800; font-family:'Manrope',sans-serif; color:{pnl_color};">${total_pnl:+.2f}</div>
   </div>
   <div class="stat-box" style="flex:1; min-width:110px;" title="Closing Line Value — how much better than closing odds you got on average. Positive = sharp betting.">
     <div style="font-size:0.72rem; color:{_c['muted']}; font-weight:600; text-transform:uppercase; letter-spacing:0.07em; margin-bottom:6px;">Avg CLV ⓘ</div>
-    <div style="font-size:2rem; font-weight:800; font-family:'Syne',sans-serif; color:{clv_color};">{avg_clv:+.2f}%</div>
+    <div style="font-size:2rem; font-weight:800; font-family:'Manrope',sans-serif; color:{clv_color};">{avg_clv:+.2f}%</div>
   </div>
 </div>""", unsafe_allow_html=True)
 
@@ -329,22 +329,22 @@ if not completed.empty:
     completed_sorted["running_roi"] = (completed_sorted["running_pnl"] / completed_sorted["stake"].cumsum() * 100)
 
     fig = go.Figure()
-    colors = ["#22d47a" if v >= 0 else "#f05252" for v in completed_sorted["running_pnl"]]
+    colors = [_c["plot_green"] if v >= 0 else _c["plot_red"] for v in completed_sorted["running_pnl"]]
     fig.add_trace(go.Scatter(
         x=list(range(1, len(completed_sorted) + 1)),
         y=completed_sorted["running_pnl"],
         mode="lines+markers",
-        line=dict(color="#22d47a", width=2),
+        line=dict(color=_c["plot_green"], width=2),
         marker=dict(color=colors, size=8),
         name="Cumulative P&L ($)"
     ))
-    _tmpl = "plotly_dark" if _c["bg"] == "#07080f" else "plotly"
+    _tmpl = _c["plotly_template"]
     fig.add_hline(y=0, line_dash="dash", line_color="gray")
     fig.update_layout(
         template=_tmpl,
         paper_bgcolor=_c["plot_paper"],
         plot_bgcolor=_c["plot_bg"],
-        font=dict(family="Syne", color=_c["plot_font"]),
+        font=dict(family="Manrope", color=_c["plot_font"]),
         xaxis_title="Bet #",
         yaxis_title="P&L ($)",
         height=350,
@@ -370,6 +370,6 @@ if not completed.empty:
             xaxis_title="CLV (%)",
             yaxis_title="Count",
             height=300,
-            font=dict(family="Syne", color=_c["plot_font"]),
+            font=dict(family="Manrope", color=_c["plot_font"]),
         )
         st.plotly_chart(fig2, use_container_width=True)

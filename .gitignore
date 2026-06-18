@@ -27,3 +27,6 @@ Thumbs.db
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Claude
+.claude/skills

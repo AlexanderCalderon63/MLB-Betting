@@ -28,12 +28,11 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
-init_theme()
+init_theme("#4f46e5")   # indigo — dashboard
 
 _c = palette()
 
-st.title("⚾ MLB Betting Dashboard")
-st.caption(f"Today is {datetime.now().strftime('%A, %B %d, %Y').replace(' 0', ' ')}")
+# Hero is rendered below, once the 30-day stats it summarizes are computed.
 
 st.sidebar.markdown("### ⚾ MLB Value Finder")
 st.sidebar.caption("Data: The Odds API · MLB Stats API")
@@ -77,28 +76,24 @@ pnl_color     = _c["green"] if total_pnl >= 0 else _c["red"]
 roi_color     = _c["green"] if roi >= 0       else _c["red"]
 pending_color = _c["red"]   if n_pending > 0  else _c["muted"]
 
-st.subheader("Last 30 Days")
+_today_str = datetime.now().strftime('%B %d, %Y').replace(' 0', ' ')
 st.markdown(f"""
-<div style="display:flex; gap:12px; margin-bottom:1rem; flex-wrap:wrap;">
-  <div class="stat-box" style="flex:1; min-width:120px;">
-    <div style="font-size:0.72rem; color:{_c['muted']}; font-weight:600; text-transform:uppercase; letter-spacing:0.07em; margin-bottom:6px;">Resolved Bets</div>
-    <div style="font-size:2rem; font-weight:800; font-family:'Syne',sans-serif; color:{_c['text']};">{n_bets}</div>
-    <div style="font-size:0.72rem; color:{_c['muted']};">real bets</div>
+<div class="hero">
+  <div class="hero-main">
+    <span class="eyebrow-pill">⚾ MLB Value Finder</span>
+    <h1>Find the edge before the market moves.</h1>
+    <p class="hero-sub">Model win probabilities, measured against live Caesars lines. When the gap clears the 4% threshold, the bet surfaces here — with the math to back it.</p>
+    <div class="hero-meta">{_today_str}  ·  Caesars moneylines  ·  4.0% edge threshold</div>
   </div>
-  <div class="stat-box" style="flex:1; min-width:120px;">
-    <div style="font-size:0.72rem; color:{_c['muted']}; font-weight:600; text-transform:uppercase; letter-spacing:0.07em; margin-bottom:6px;">Win Rate</div>
-    <div style="font-size:2rem; font-weight:800; font-family:'Syne',sans-serif; color:{_c['text']};">{win_rate:.1f}%</div>
-    <div style="font-size:0.72rem; color:{_c['muted']};">real bets only</div>
-  </div>
-  <div class="stat-box" style="flex:1; min-width:120px;">
-    <div style="font-size:0.72rem; color:{_c['muted']}; font-weight:600; text-transform:uppercase; letter-spacing:0.07em; margin-bottom:6px;">P&L</div>
-    <div style="font-size:2rem; font-weight:800; font-family:'Syne',sans-serif; color:{pnl_color};">${total_pnl:+.2f}</div>
-    <div style="font-size:0.72rem; color:{roi_color};">ROI: {roi:+.1f}%</div>
-  </div>
-  <div class="stat-box" style="flex:1; min-width:120px;">
-    <div style="font-size:0.72rem; color:{_c['muted']}; font-weight:600; text-transform:uppercase; letter-spacing:0.07em; margin-bottom:6px;">Pending Outcomes</div>
-    <div style="font-size:2rem; font-weight:800; font-family:'Syne',sans-serif; color:{pending_color};">{n_pending}</div>
-    <div style="font-size:0.72rem; color:{_c['muted']};">{len(pending_real)} real · {len(pending_paper)} paper</div>
+  <div class="hero-card">
+    <div class="hc-label">Last 30 Days · Net P&amp;L</div>
+    <div class="hc-pnl" style="color:{pnl_color};">${total_pnl:+,.2f}</div>
+    <div class="hc-grid">
+      <div class="hc-stat"><span>Win Rate</span><b>{win_rate:.0f}%</b></div>
+      <div class="hc-stat"><span>ROI</span><b style="color:{roi_color};">{roi:+.1f}%</b></div>
+      <div class="hc-stat"><span>Resolved</span><b>{n_bets}</b></div>
+      <div class="hc-stat"><span>Pending</span><b style="color:{pending_color};">{n_pending}</b></div>
+    </div>
   </div>
 </div>
 """, unsafe_allow_html=True)
@@ -113,6 +108,7 @@ st.divider()
 
 # ── Today's Value Bets ─────────────────────────────────────────────────────────
 
+st.markdown('<span class="eyebrow-pill">Live Slate</span>', unsafe_allow_html=True)
 st.subheader("Today's Value Bets")
 
 @st.cache_data(ttl=300)
@@ -205,8 +201,8 @@ else:
                     odds_str    = f"+{ml}" if ml > 0 else str(ml)
 
                     st.markdown(f"""
-<div style="background:{_c['surface2']}; border:1px solid {_c['border']}; border-radius:10px;
-            padding:0.8rem 1.1rem; margin-bottom:0.6rem;
+<div style="background:{_c['surface']}; border:1px solid {_c['border']}; border-left:4px solid {badge_color};
+            border-radius:14px; padding:0.95rem 1.25rem; margin-bottom:0.6rem; box-shadow:{_c['shadow']};
             display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.75rem;">
   <div>
     <div style="font-size:0.75rem; color:{_c['muted']};">{g['away_team']} @ {g['home_team']} · {time_str}</div>

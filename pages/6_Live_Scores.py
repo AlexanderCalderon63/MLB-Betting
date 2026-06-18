@@ -9,14 +9,15 @@ import streamlit as st
 import requests
 from datetime import datetime, timezone, timedelta
 from database import get_connection, init_db
-from theme import init_theme
+from theme import init_theme, palette
 
 init_db()
 
 BASE = "https://statsapi.mlb.com/api/v1"
 
 st.set_page_config(page_title="Live Scores", page_icon="📺", layout="wide")
-init_theme()
+init_theme("#be185d")   # pink — live scores
+c = palette()   # active theme colors for inline HTML
 
 st.title("📺 Live Box Scores")
 st.caption("Inning-by-inning scores for today's MLB games · Press refresh to update")
@@ -313,8 +314,8 @@ for game in display_games:
         # Title row
         st.markdown(
             f'<div style="display:flex; align-items:baseline; gap:8px;">'
-            f'<span style="font-size:1.1rem; font-weight:800; color:#e2e8f0;">'
-            f'⚾ {away_name} <span style="color:#4a5568">@</span> {home_name}'
+            f'<span style="font-size:1.1rem; font-weight:800; color:{c["text"]};">'
+            f'⚾ {away_name} <span style="color:{c["muted"]}">@</span> {home_name}'
             f'</span>{bet_pill}</div>',
             unsafe_allow_html=True,
         )

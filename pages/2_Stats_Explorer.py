@@ -10,7 +10,7 @@ from ingestion.stats_scraper import get_full_team_stats
 from theme import init_theme, palette
 
 st.set_page_config(page_title="Stats Explorer", page_icon="📊", layout="wide")
-init_theme()
+init_theme("#0f766e")   # teal — stats explorer
 
 st.title("📊 Team Stats Explorer")
 st.caption("Season-level data scraped from Baseball Reference — the features powering the model")
@@ -57,7 +57,7 @@ fig = px.scatter(
     labels={"pythag_pct": "Pythagorean Win%", "win_pct": "Actual Win%"},
     color="run_diff",
     color_continuous_scale="RdYlGn",
-    template="plotly_dark" if palette().get("bg") == "#07080f" else "plotly",
+    template=palette()["plotly_template"],
 )
 fig.add_shape(type="line", x0=0.3, y0=0.3, x1=0.7, y1=0.7,
               line=dict(color="gray", dash="dash", width=1))
@@ -67,7 +67,7 @@ fig.update_layout(
     height=550,
     paper_bgcolor=_c["plot_paper"],
     plot_bgcolor=_c["plot_bg"],
-    font=dict(family="Syne", color=_c["plot_font"]),
+    font=dict(family="Manrope", color=_c["plot_font"]),
     coloraxis_colorbar=dict(title="Run Diff"),
 )
 st.plotly_chart(fig, use_container_width=True)
@@ -95,11 +95,11 @@ if "home_win_pct" in df.columns and "away_win_pct" in df.columns:
     ))
     fig2.update_layout(
         barmode="group",
-        template="plotly_dark" if _c2["bg"] == "#07080f" else "plotly",
+        template=_c2["plotly_template"],
         height=500,
         paper_bgcolor=_c2["plot_paper"],
         plot_bgcolor=_c2["plot_bg"],
-        font=dict(family="Syne", color=_c2["plot_font"]),
+        font=dict(family="Manrope", color=_c2["plot_font"]),
         yaxis_title="Win%",
     )
     st.plotly_chart(fig2, use_container_width=True)
