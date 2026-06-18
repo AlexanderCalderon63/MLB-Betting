@@ -12,6 +12,7 @@ import plotly.graph_objects as go
 from datetime import date
 from database import init_db, get_connection
 from theme import init_theme, palette
+from ui import responsive_chart
 
 init_db()
 
@@ -331,6 +332,6 @@ if n_resolved >= 3:
         yaxis_title="P&L ($)",
         height=350,
     )
-    st.plotly_chart(fig, use_container_width=True)
+    responsive_chart(fig, key="plt_pnl")
 
 st.caption("⚠️ Parlays are high-variance bets. Win rate and ROI require a large sample to be meaningful. Not financial advice.")

@@ -13,6 +13,7 @@ Flow:
 
 import requests
 import time
+import threading
 
 BASE = "https://statsapi.mlb.com/api/v1"
 
@@ -407,111 +408,47 @@ def get_team_pitchers(team_name: str, season: int = None) -> list[str]:
         return []
 
 
-def _get_team_id(team_name: str) -> int | None:
-    """Look up a team's MLB ID by name."""
-    if team_name in _TEAM_ID_CACHE:
-        return _TEAM_ID_CACHE[team_name]
-
-    try:
-        url = f"{BASE}/teams"
-        params = {"sportId": 1, "activeStatus": "Y"}
-        resp = _get(url, params)
-        teams = resp.get("teams", [])
-
-        name_lower = team_name.lower().strip()
-        for team in teams:
-            full = team.get("name", "").lower()
-            # Handle edge cases like "Athletics" vs "Oakland Athletics"
-            if full == name_lower or name_lower in full or full in name_lower:
-                tid = team["id"]
-                _TEAM_ID_CACHE[team_name] = tid
-                return tid
-
-        return None
-
-    except Exception as e:
-        print(f"[ROSTER] Team ID lookup failed: {e}")
-        return None
+_ALL_TEAMS_CACHE: list = []
+_ALL_TEAMS_LOCK = threading.Lock()
 
 
-# ── Roster fetcher ─────────────────────────────────────────────────────────────
-
-# Cache team ID lookups so we don't re-fetch on every rerun
-_TEAM_ID_CACHE = {}
-_ROSTER_CACHE  = {}
-
-def get_team_pitchers(team_name: str, season: int = None) -> list[str]:
-    """
-    Fetch all pitchers currently on an MLB team's active roster.
-    Returns a sorted list of pitcher names for use in a dropdown.
-    """
-    if season is None:
-        from datetime import datetime
-        season = datetime.now().year
-
-    cache_key = f"{team_name}_{season}"
-    if cache_key in _ROSTER_CACHE:
-        return _ROSTER_CACHE[cache_key]
-
-    try:
-        team_id = _get_team_id(team_name)
-        if not team_id:
-            return []
-
-        url = f"{BASE}/teams/{team_id}/roster"
-        params = {
-            "rosterType": "active",
-            "season":     season,
-        }
-        resp = _get(url, params)
-        roster = resp.get("roster", [])
-
-        pitchers = []
-        for player in roster:
-            pos = player.get("position", {}).get("code", "")
-            if pos == "1":  # pitcher position code
-                name = player.get("person", {}).get("fullName", "")
-                if name:
-                    pitchers.append(name)
-
-        pitchers = sorted(pitchers)
-        _ROSTER_CACHE[cache_key] = pitchers
-        print(f"[ROSTER] {team_name}: {len(pitchers)} pitchers found")
-        return pitchers
-
-    except Exception as e:
-        print(f"[ROSTER] Failed for {team_name}: {e}")
-        return []
+def _all_teams() -> list:
+    """Fetch the full MLB team list once and cache it. Avoids hitting the
+    /teams endpoint repeatedly (each _get_team_id call used to refetch the
+    entire league), which matters now that lookups run in parallel threads.
+    The lock ensures exactly one network fetch even under concurrent callers."""
+    if not _ALL_TEAMS_CACHE:
+        with _ALL_TEAMS_LOCK:
+            if not _ALL_TEAMS_CACHE:
+                try:
+                    resp = _get(f"{BASE}/teams", {"sportId": 1, "activeStatus": "Y"})
+                    _ALL_TEAMS_CACHE.extend(resp.get("teams", []))
+                except Exception as e:
+                    print(f"[ROSTER] Team list fetch failed: {e}")
+    return _ALL_TEAMS_CACHE
 
 
 def _get_team_id(team_name: str) -> int | None:
-    """Look up MLB team ID by name."""
+    """Look up a team's MLB ID by name, caching results per name."""
     if team_name in _TEAM_ID_CACHE:
         return _TEAM_ID_CACHE[team_name]
 
-    try:
-        url = f"{BASE}/teams"
-        params = {"sportId": 1, "activeStatus": "Yes"}
-        resp = _get(url, params)
-        teams = resp.get("teams", [])
+    teams = _all_teams()
+    name_lower = team_name.lower().strip()
 
-        name_lower = team_name.lower()
-        for t in teams:
-            full = t.get("name", "").lower()
-            short = t.get("teamName", "").lower()
-            if full == name_lower or short in name_lower or name_lower in full:
-                _TEAM_ID_CACHE[team_name] = t["id"]
-                return t["id"]
+    # Handle edge cases like "Athletics" vs "Oakland Athletics"
+    for team in teams:
+        full = team.get("name", "").lower()
+        if full == name_lower or name_lower in full or full in name_lower:
+            _TEAM_ID_CACHE[team_name] = team["id"]
+            return team["id"]
 
-        # Partial fallback
-        for t in teams:
-            words = t.get("name", "").lower().split()
-            if any(w in name_lower for w in words if len(w) > 3):
-                _TEAM_ID_CACHE[team_name] = t["id"]
-                return t["id"]
-
-    except Exception as e:
-        print(f"[ROSTER] Team ID lookup failed for {team_name}: {e}")
+    # Partial fallback on significant words
+    for team in teams:
+        words = team.get("name", "").lower().split()
+        if any(w in name_lower for w in words if len(w) > 3):
+            _TEAM_ID_CACHE[team_name] = team["id"]
+            return team["id"]
 
     return None
 

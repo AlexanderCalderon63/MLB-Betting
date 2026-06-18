@@ -8,6 +8,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 from ingestion.stats_scraper import get_full_team_stats
 from theme import init_theme, palette
+from ui import responsive_chart, responsive_table
 
 st.set_page_config(page_title="Stats Explorer", page_icon="📊", layout="wide")
 init_theme("#0f766e")   # teal — stats explorer
@@ -43,7 +44,9 @@ else:
     display_df.columns = ["Team", "W", "L", "Win%", "Run Diff", "Pythag%"]
 display_df = display_df.sort_values("W", ascending=False)
 
-st.dataframe(display_df, use_container_width=True, hide_index=True)
+responsive_table(display_df, key="se_standings",
+                 numeric_cols=[c for c in ["W", "L", "Win%", "Run Diff", "Pythag%", "Last 10"] if c in display_df.columns],
+                 signed_cols=["Run Diff"])
 
 st.divider()
 
@@ -70,7 +73,7 @@ fig.update_layout(
     font=dict(family="Manrope", color=_c["plot_font"]),
     coloraxis_colorbar=dict(title="Run Diff"),
 )
-st.plotly_chart(fig, use_container_width=True)
+responsive_chart(fig, key="se_scatter")
 
 st.divider()
 
@@ -102,7 +105,7 @@ if "home_win_pct" in df.columns and "away_win_pct" in df.columns:
         font=dict(family="Manrope", color=_c2["plot_font"]),
         yaxis_title="Win%",
     )
-    st.plotly_chart(fig2, use_container_width=True)
+    responsive_chart(fig2, key="se_splits")
 
 st.divider()
 

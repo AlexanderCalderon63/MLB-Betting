@@ -106,6 +106,14 @@ def get_connection() -> _PgConn:
     return _PgConn()
 
 
+# Schema is idempotent and rarely changes, but `init_db()` is called at the top of
+# every page — i.e. on every Streamlit rerun (every button click). Running its ~12
+# round-trips to Supabase each time added noticeable latency to every interaction.
+# This guard makes repeat calls a no-op for the life of the process. Pass force=True
+# (or restart the app) after changing the schema.
+_DB_INITIALIZED = False
+
+
 def _col_names(conn: _PgConn, table: str) -> set:
     rows = conn.execute(
         "SELECT column_name FROM information_schema.columns WHERE table_name = %s",
@@ -114,7 +122,11 @@ def _col_names(conn: _PgConn, table: str) -> set:
     return {row["column_name"] for row in rows}
 
 
-def init_db():
+def init_db(force: bool = False):
+    global _DB_INITIALIZED
+    if _DB_INITIALIZED and not force:
+        return
+
     conn = get_connection()
 
     conn.execute("""
@@ -272,6 +284,7 @@ def init_db():
 
     conn.commit()
     conn.close()
+    _DB_INITIALIZED = True
     print("[DB] Initialized at Supabase")
 
 

@@ -146,7 +146,7 @@ h1, h2, h3, h4 { font-family: 'Manrope', sans-serif !important; letter-spacing: 
 
 
 def _build_css(c: dict) -> str:
-    return f"<style>{_FONTS}{_st_overrides(c)}{_custom_css(c)}</style>"
+    return f"<style>{_FONTS}{_st_overrides(c)}{_custom_css(c)}{_responsive_css(c)}</style>"
 
 
 def _st_overrides(c: dict) -> str:
@@ -629,4 +629,152 @@ def _custom_css(c: dict) -> str:
 .wx-hot         {{ background: {c['amber']}1a;  color: {c['amber']};  border: 1px solid {c['amber']}44; }}
 .wx-wind        {{ background: {c['surface2']}; color: {c['muted']};  border: 1px solid {c['border']}; }}
 .wx-wind-strong {{ background: {c['amber']}22;  color: {c['amber']};  border: 1px solid {c['amber']}44; }}
+
+/* ── Responsive table (ui.responsive_table) — clean grid on desktop, ── */
+/* ── stacked label/value cards on phones (see media query below) ── */
+.rtable-wrap {{
+    width: 100%;
+    max-height: 460px;                 /* tall tables scroll instead of growing forever */
+    overflow: auto;
+    -webkit-overflow-scrolling: touch;
+    border: 1px solid {c['border']};
+    border-radius: 14px;
+    box-shadow: {c['shadow']};
+}}
+.rtable-wrap::-webkit-scrollbar {{ width: 10px; height: 10px; }}
+.rtable-wrap::-webkit-scrollbar-thumb {{ background: {c['border2']}; border-radius: 999px; border: 2px solid {c['surface']}; }}
+.rtable-wrap::-webkit-scrollbar-thumb:hover {{ background: {c['muted']}; }}
+.rtable-wrap::-webkit-scrollbar-track {{ background: transparent; }}
+.rtable {{
+    width: 100%; border-collapse: collapse;
+    background: {c['surface']};
+    font-size: 0.86rem;
+}}
+.rtable thead th {{
+    position: sticky; top: 0; z-index: 2;       /* header stays put while the body scrolls */
+    background: {c['surface2']}; color: {c['muted']};
+    text-align: left; padding: 0.7rem 0.95rem;
+    font-size: 0.68rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.07em;
+    border-bottom: 1px solid {c['border']}; white-space: nowrap;
+    box-shadow: inset 0 -1px 0 {c['border']};   /* keep the under-rule visible when stuck */
+}}
+.rtable tbody td {{
+    padding: 0.65rem 0.95rem; color: {c['text']};
+    border-bottom: 1px solid {c['border']};
+    font-variant-numeric: tabular-nums;
+}}
+.rtable tbody tr:last-child td {{ border-bottom: none; }}
+.rtable tbody tr:hover td {{ background: {c['surface2']}; }}
+.rtable td.num, .rtable th.num {{ text-align: right; font-family: 'Space Mono', monospace; }}
+.rtable td.pos {{ color: {c['green']}; font-weight: 700; }}
+.rtable td.neg {{ color: {c['red']}; font-weight: 700; }}
+
+/* ── Odds table signal sub-label (Today's Games) ── */
+.odds-sig-sub {{
+    font-size: 0.7rem; color: {c['muted']}; margin-top: 3px;
+    font-family: 'Space Mono', monospace; letter-spacing: 0.02em;
+}}
+
+/* ── Chart caption / interactive-zoom hint ── */
+.chart-hint {{
+    font-family: 'Space Mono', monospace; font-size: 0.7rem; color: {c['muted']};
+    letter-spacing: 0.03em; margin: 0.1rem 0 0.2rem;
+}}
+"""
+
+
+def _responsive_css(c: dict) -> str:
+    """Breakpoints layered last so they win over base rules at equal specificity.
+
+    Tablet (≤1024px) tightens the canvas; phone (≤640px) is the real adaptation:
+    Streamlit column rows wrap to a single column, type scales down, dense grids
+    collapse, controls go full-width for thumbs, and responsive tables fold from a
+    grid into stacked label/value cards.
+    """
+    return f"""
+/* ── Tablet ── */
+@media (max-width: 1024px) {{
+    .block-container {{ padding-left: 1.4rem !important; padding-right: 1.4rem !important; padding-top: 1.8rem !important; }}
+    .hero {{ padding: 2.2rem 2rem; gap: 1.8rem; }}
+    .block-container .hero h1 {{ font-size: 2.4rem !important; }}
+    .info-grid {{ grid-template-columns: repeat(2, 1fr); }}
+}}
+
+/* ── Phone ── */
+@media (max-width: 640px) {{
+    .block-container {{
+        padding-left: 0.85rem !important; padding-right: 0.85rem !important;
+        padding-top: 1.1rem !important; padding-bottom: 2.5rem !important;
+        max-width: 100% !important;
+    }}
+
+    /* Stack every column row vertically — the core mobile reflow */
+    [data-testid="stHorizontalBlock"] {{ flex-wrap: wrap !important; gap: 0.55rem !important; }}
+    [data-testid="stHorizontalBlock"] > div[data-testid="stColumn"],
+    [data-testid="stHorizontalBlock"] > div[data-testid="column"],
+    [data-testid="stHorizontalBlock"] > div {{
+        flex: 1 1 100% !important; min-width: 100% !important; width: 100% !important;
+    }}
+    /* …but metric cards read better 2-up than as a tall stack */
+    [data-testid="stHorizontalBlock"] > div:has([data-testid="stMetric"]),
+    [data-testid="stHorizontalBlock"] > div:has([data-testid="metric-container"]) {{
+        flex: 1 1 calc(50% - 0.55rem) !important; min-width: calc(50% - 0.55rem) !important; width: auto !important;
+    }}
+
+    /* Type scale */
+    [data-testid="stAppViewContainer"] .block-container h1 {{ font-size: 1.62rem !important; }}
+    [data-testid="stAppViewContainer"] .block-container h2 {{ font-size: 1.3rem !important; }}
+    [data-testid="stAppViewContainer"] .block-container h3 {{ font-size: 1.08rem !important; }}
+
+    /* Hero → single column statement */
+    .hero {{ flex-direction: column; padding: 1.5rem 1.3rem; border-radius: 18px; gap: 1.2rem; }}
+    .block-container .hero h1 {{ font-size: 1.85rem !important; max-width: none; }}
+    .hero-sub {{ font-size: 0.95rem; }}
+    .hero-card {{ flex: 1 1 100%; width: 100%; padding: 1.2rem 1.3rem; }}
+    .hc-pnl {{ font-size: 2.1rem; }}
+
+    /* Dense grids collapse */
+    .info-grid {{ grid-template-columns: 1fr; gap: 0.7rem; }}
+    .page-header {{ padding: 1.2rem 1.3rem; border-radius: 16px; }}
+    .page-header h2 {{ font-size: 1.35rem; }}
+    .game-block {{ padding: 1.1rem 1.15rem; }}
+    .game-matchup {{ font-size: 1.08rem; }}
+
+    /* Controls sized for thumbs */
+    .stButton > button, .stDownloadButton > button, .stFormSubmitButton > button {{
+        width: 100% !important; padding: 0.7rem 1.1rem !important;
+    }}
+    [data-testid="stForm"] {{ padding: 1.1rem !important; }}
+
+    /* Metric cards a touch tighter */
+    [data-testid="stMetric"] {{ padding: 0.85rem 1rem !important; }}
+    [data-testid="stMetricValue"] {{ font-size: 1.5rem !important; }}
+
+    /* Tab pills scroll instead of squishing */
+    [data-testid="stTabs"] [data-baseweb="tab-list"] {{ overflow-x: auto; flex-wrap: nowrap; }}
+    [data-testid="stTabs"] [data-baseweb="tab-list"]::-webkit-scrollbar {{ display: none; }}
+
+    /* Responsive table → stacked label/value cards (flow with the page, no cap) */
+    .rtable-wrap {{ max-height: none; overflow: visible; border: none; box-shadow: none; border-radius: 0; }}
+    .rtable {{ border: none; box-shadow: none; background: transparent; }}
+    .rtable thead {{ display: none; }}
+    .rtable tbody, .rtable tr, .rtable td {{ display: block; width: 100%; }}
+    .rtable tbody tr {{
+        background: {c['surface']}; border: 1px solid {c['border']};
+        border-radius: 14px; box-shadow: {c['shadow']};
+        margin-bottom: 0.6rem; padding: 0.35rem 0.2rem; overflow: hidden;
+    }}
+    .rtable tbody td {{
+        display: flex; align-items: center; justify-content: space-between; gap: 1rem;
+        border-bottom: 1px dashed {c['border']}; padding: 0.55rem 0.95rem; text-align: right;
+    }}
+    .rtable tbody tr td:last-child {{ border-bottom: none; }}
+    .rtable tbody td::before {{
+        content: attr(data-label); flex: 0 0 auto; text-align: left;
+        font-size: 0.66rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em;
+        color: {c['muted']}; font-family: 'Inter', sans-serif;
+    }}
+    .rtable td.num {{ justify-content: space-between; }}
+    .rtable tbody tr:hover td {{ background: transparent; }}
+}}
 """
