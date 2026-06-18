@@ -17,6 +17,7 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.preprocessing import StandardScaler
 from sklearn.pipeline import Pipeline
 from theme import init_theme, palette
+from ui import responsive_chart, responsive_table
 
 init_db()
 
@@ -146,13 +147,12 @@ if model_trained:
         best_C        = saved.get("best_C", None)
         cv_brier      = saved.get("cv_brier", None)
         cal_method    = saved.get("cal_method", None)
-        c1, c2, c3, c4, c5 = st.columns(5)
-        c1.metric("Status",           "Trained ✅")
-        c2.metric("Training Samples", f"{n_samples:,}")
-        c3.metric("Pitcher Features", "Yes" if with_pitchers else "No")
-        c4.metric("Best C",           str(best_C) if best_C is not None else "—",
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Training Samples", f"{n_samples:,}")
+        c2.metric("Pitcher Features", "Yes" if with_pitchers else "No")
+        c3.metric("Best C",           str(best_C) if best_C is not None else "—",
                   help="Regularization strength selected by cross-validation. Lower = more conservative.")
-        c5.metric("CV Brier Score",   f"{cv_brier:.4f}" if cv_brier is not None else "—",
+        c4.metric("CV Brier Score",   f"{cv_brier:.4f}" if cv_brier is not None else "—",
                   help="Cross-validated Brier score. Lower is better. 0.25 = random, ~0.22 is typical for sports.")
     except Exception:
         st.warning("Model file found but could not be read.")
@@ -195,7 +195,7 @@ if db_summary:
     summary_rows.append({"Season": "Total", "Games": f"{sum(db_summary.values()):,}", "Pitcher Data": ""})
     col_tbl, col_spacer = st.columns([1.5, 1.5])
     with col_tbl:
-        st.dataframe(pd.DataFrame(summary_rows), use_container_width=True, hide_index=True)
+        responsive_table(pd.DataFrame(summary_rows), key="mp_training", numeric_cols=["Games", "Pitcher Data"])
     if paper_training_count:
         st.caption(f"+ {paper_training_count} completed paper bet(s) with feature data also included in training.")
 else:
@@ -431,7 +431,7 @@ if enough_bets:
         height=420,
         legend=dict(x=0.02, y=0.98),
     )
-    st.plotly_chart(fig_calib, use_container_width=True)
+    responsive_chart(fig_calib, key="mp_calib")
 
     if not calib_plot.empty:
         brier = ((resolved["model_prob"] - resolved["won"]) ** 2).mean()
@@ -476,13 +476,13 @@ if enough_bets:
             xaxis_title=None,
             height=380,
         )
-        st.plotly_chart(fig_wr, use_container_width=True)
+        responsive_chart(fig_wr, key="mp_winrate")
 
         display = tier_stats.copy()
         display["win_rate"] = (display["win_rate"] * 100).round(1).astype(str) + "%"
         display["avg_edge"]  = (display["avg_edge"]  * 100).round(1).astype(str) + "%"
         display.columns = ["Signal Tier", "Bets", "Win Rate", "Avg Edge"]
-        st.dataframe(display, use_container_width=True, hide_index=True)
+        responsive_table(display, key="mp_tiers", numeric_cols=["Bets", "Win Rate", "Avg Edge"])
 
     st.divider()
 
@@ -516,7 +516,7 @@ if enough_bets:
             yaxis_title="Model probability (%)",
             height=400,
         )
-        st.plotly_chart(fig_scatter, use_container_width=True)
+        responsive_chart(fig_scatter, key="mp_scatter")
 
     st.divider()
 
@@ -618,7 +618,7 @@ with st.expander("📈 Historical Backtesting (Out-of-Sample)", expanded=False):
             height=420,
             legend=dict(x=0.02, y=0.98),
         )
-        st.plotly_chart(fig_bt, use_container_width=True)
+        responsive_chart(fig_bt, key="mp_backtest")
 
         # Season-by-season breakdown table
         st.markdown("**Accuracy by Season**")
@@ -632,7 +632,8 @@ with st.expander("📈 Historical Backtesting (Out-of-Sample)", expanded=False):
                 "Home Win Rate":   f"{sg['home_win'].mean()*100:.1f}%",
                 "Brier Score":     f"{((sg['model_prob'] - sg['home_win'])**2).mean():.4f}",
             })
-        st.dataframe(pd.DataFrame(season_rows), use_container_width=True, hide_index=True)
+        responsive_table(pd.DataFrame(season_rows), key="mp_season",
+                         numeric_cols=["Season", "Games", "Model Accuracy", "Home Win Rate", "Brier Score"])
         st.caption(
             "Model Accuracy = % of games where model picked the correct winner (prob > 0.5). "
             "Home Win Rate = naive baseline of always picking the home team."

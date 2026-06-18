@@ -4,6 +4,7 @@ pages/1_Todays_Games.py — Live odds + model predictions + integrated bet slip
 
 import sys
 import os
+import html
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from dotenv import load_dotenv
@@ -37,7 +38,7 @@ with col_refresh:
         st.cache_data.clear()
         for key in [k for k in st.session_state if k.startswith(("llm_", "insight_"))]:
             del st.session_state[key]
-        for key in ["pitcher_data", "pitchers_loaded"]:
+        for key in ["pitcher_data", "pitchers_loaded", "h2h_data", "weather_data", "_warm_sig"]:
             st.session_state.pop(key, None)
         st.rerun()
 with col_filter:
@@ -123,99 +124,156 @@ def load_roster(team_name: str) -> list[str]:
     pitchers = get_team_pitchers(team_name)
     return pitchers if pitchers else []
 
-@st.cache_data(ttl=3600)
-def load_h2h(home_team: str, away_team: str) -> list[dict]:
-    return get_head_to_head(home_team, away_team, n=5)
-
-@st.cache_data(ttl=3600)
-def load_weather(home_team: str) -> dict | None:
+def _weather_key() -> str | None:
     try:
-        api_key = st.secrets["weather"]["openweathermap_api_key"]
+        return st.secrets["weather"]["openweathermap_api_key"]
     except Exception:
         return None
-    return get_weather(home_team, api_key)
+
+def _warm_game_data(games: list, probable: dict, wx_key: str | None) -> tuple[dict, dict, dict]:
+    """Fetch pitcher stats, head-to-head history, and weather for every game
+    concurrently. A single thread pool across all three call types collapses
+    what used to be ~30s of sequential MLB API calls into a few seconds."""
+    import concurrent.futures
+
+    name_for: dict = {}
+    pitcher_names: set = set()
+    for g in games:
+        hn = probable.get(g["home_team"])
+        an = probable.get(g["away_team"])
+        name_for[g["base_game_id"]] = (hn, an)
+        if hn: pitcher_names.add(hn)
+        if an: pitcher_names.add(an)
+
+    home_teams = list({g["home_team"] for g in games})
+
+    pstats: dict = {}
+    h2h: dict = {}
+    weather: dict = {}
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as ex:
+        # Submit everything first so all calls run concurrently, then collect.
+        fp = {ex.submit(search_pitcher, n): n for n in pitcher_names}
+        fh = {ex.submit(get_head_to_head, g["home_team"], g["away_team"], 5): g["base_game_id"] for g in games}
+        fw = {ex.submit(get_weather, t, wx_key): t for t in home_teams} if wx_key else {}
+
+        for fut, n in fp.items():
+            try:    pstats[n] = fut.result()
+            except Exception: pstats[n] = None
+        for fut, bid in fh.items():
+            try:    h2h[bid] = fut.result()
+            except Exception: h2h[bid] = []
+        for fut, t in fw.items():
+            try:    weather[t] = fut.result()
+            except Exception: weather[t] = None
+
+    pitcher_data: dict = {}
+    for g in games:
+        bid = g["base_game_id"]
+        hn, an = name_for[bid]
+        pitcher_data[bid] = {
+            "home":      pstats.get(hn) if hn else None,
+            "away":      pstats.get(an) if an else None,
+            "home_name": hn or "",
+            "away_name": an or "",
+        }
+    return pitcher_data, h2h, weather
 
 today_str = datetime.now().strftime("%Y-%m-%d")
+probable  = load_probable_pitchers(today_str)
 
-if "pitchers_loaded" not in st.session_state:
-    with st.spinner("Loading probable starters..."):
-        probable = load_probable_pitchers(today_str)
-
-    pitcher_data = {}
-    for g in unique_games:
-        bid = g["base_game_id"]
-        home_name = probable.get(g["home_team"])
-        away_name = probable.get(g["away_team"])
-        home_sp = load_pitcher_stats(home_name) if home_name else None
-        away_sp = load_pitcher_stats(away_name) if away_name else None
-        pitcher_data[bid] = {
-            "home": home_sp,
-            "away": away_sp,
-            "home_name": home_name or "",
-            "away_name": away_name or "",
-        }
-
-    st.session_state["pitcher_data"] = pitcher_data
-    st.session_state["pitchers_loaded"] = True
+# Warm pitcher/H2H/weather data once per slate (re-runs only if the games change
+# or the user hits Refresh, which clears _warm_sig).
+_warm_sig = tuple(sorted(g["base_game_id"] for g in unique_games))
+if st.session_state.get("_warm_sig") != _warm_sig:
+    with st.spinner("Loading probable starters, matchups & weather..."):
+        _pd, _h2h, _wx = _warm_game_data(unique_games, probable, _weather_key())
+    st.session_state["pitcher_data"] = _pd
+    st.session_state["h2h_data"]     = _h2h
+    st.session_state["weather_data"] = _wx
+    st.session_state["_warm_sig"]    = _warm_sig
 
 pitcher_data = st.session_state.get("pitcher_data", {})
-probable = load_probable_pitchers(today_str)
+h2h_data     = st.session_state.get("h2h_data", {})
+weather_data = st.session_state.get("weather_data", {})
 
-# ── Override expander ──────────────────────────────────────────────────────────
-with st.expander("🔄 Override Starting Pitchers", expanded=False):
-    st.caption("Probable starters are loaded automatically. Use this only if a pitcher has been scratched or changed.")
+# ── Override starting pitchers (opt-in) ────────────────────────────────────────
+# Rosters are NOT loaded up front — fetching ~30 of them used to cost several
+# seconds on every page load for a feature most visits never touch. The panel
+# (and its roster fetches) only render once the user explicitly opens it.
+if not st.session_state.get("override_enabled"):
+    oc1, oc2 = st.columns([1.7, 5])
+    with oc1:
+        if st.button("🔄 Override Starting Pitchers", use_container_width=True,
+                     help="Manually pick a starter if someone was scratched or changed"):
+            with st.spinner("Loading rosters..."):
+                import concurrent.futures
+                _teams = {t for g in unique_games for t in (g["home_team"], g["away_team"])}
+                with concurrent.futures.ThreadPoolExecutor(max_workers=8) as _ex:
+                    list(_ex.map(get_team_pitchers, _teams))   # warms roster cache in parallel
+            st.session_state["override_enabled"] = True
+            st.rerun()
+    with oc2:
+        st.caption("Probable starters are loaded automatically — open this only if a pitcher was scratched.")
+else:
+    with st.expander("🔄 Override Starting Pitchers", expanded=True):
+        hdr_col, close_col = st.columns([5, 1.3])
+        hdr_col.caption("Pick a starter for any game, then update. Closing hides the roster lists again.")
+        if close_col.button("✕ Close", use_container_width=True):
+            st.session_state["override_enabled"] = False
+            st.rerun()
 
-    override_inputs = {}
-    for g in unique_games:
-        bid = g["base_game_id"]
-        current = pitcher_data.get(bid, {})
+        override_inputs = {}
+        for g in unique_games:
+            bid = g["base_game_id"]
+            current = pitcher_data.get(bid, {})
 
-        st.markdown(f"**{g['away_team']} @ {g['home_team']}**")
-        c1, c2 = st.columns(2)
+            st.markdown(f"**{g['away_team']} @ {g['home_team']}**")
+            c1, c2 = st.columns(2)
 
-        home_roster = load_roster(g["home_team"])
-        away_roster = load_roster(g["away_team"])
+            home_roster = load_roster(g["home_team"])
+            away_roster = load_roster(g["away_team"])
 
-        home_probable = probable.get(g["home_team"], "")
-        away_probable = probable.get(g["away_team"], "")
+            home_probable = probable.get(g["home_team"], "")
+            away_probable = probable.get(g["away_team"], "")
 
-        with c1:
-            st.caption(f"🏠 {g['home_team']}")
-            home_options = ["— Select pitcher —"] + home_roster
-            home_default = home_options.index(home_probable) if home_probable in home_options else 0
-            home_sel = st.selectbox(
-                f"home_{bid}", options=home_options, index=home_default,
-                key=f"hp_{bid}", label_visibility="collapsed",
-            )
+            with c1:
+                st.caption(f"🏠 {g['home_team']}")
+                home_options = ["— Select pitcher —"] + home_roster
+                home_default = home_options.index(home_probable) if home_probable in home_options else 0
+                home_sel = st.selectbox(
+                    f"home_{bid}", options=home_options, index=home_default,
+                    key=f"hp_{bid}", label_visibility="collapsed",
+                )
 
-        with c2:
-            st.caption(f"✈️ {g['away_team']}")
-            away_options = ["— Select pitcher —"] + away_roster
-            away_default = away_options.index(away_probable) if away_probable in away_options else 0
-            away_sel = st.selectbox(
-                f"away_{bid}", options=away_options, index=away_default,
-                key=f"ap_{bid}", label_visibility="collapsed",
-            )
+            with c2:
+                st.caption(f"✈️ {g['away_team']}")
+                away_options = ["— Select pitcher —"] + away_roster
+                away_default = away_options.index(away_probable) if away_probable in away_options else 0
+                away_sel = st.selectbox(
+                    f"away_{bid}", options=away_options, index=away_default,
+                    key=f"ap_{bid}", label_visibility="collapsed",
+                )
 
-        override_inputs[bid] = {
-            "home_name": "" if home_sel == "— Select pitcher —" else home_sel,
-            "away_name": "" if away_sel == "— Select pitcher —" else away_sel,
-        }
+            override_inputs[bid] = {
+                "home_name": "" if home_sel == "— Select pitcher —" else home_sel,
+                "away_name": "" if away_sel == "— Select pitcher —" else away_sel,
+            }
 
-    if st.button("🔍 Update with Selected Pitchers", type="primary"):
-        with st.spinner("Fetching updated pitcher stats..."):
-            for bid, names in override_inputs.items():
-                home_sp = load_pitcher_stats(names["home_name"]) if names["home_name"] else None
-                away_sp = load_pitcher_stats(names["away_name"]) if names["away_name"] else None
-                st.session_state["pitcher_data"][bid] = {
-                    "home": home_sp,
-                    "away": away_sp,
-                    "home_name": names["home_name"],
-                    "away_name": names["away_name"],
-                }
-        pitcher_data = st.session_state["pitcher_data"]
-        st.success("✅ Pitcher stats updated.")
-        st.rerun()
+        if st.button("🔍 Update with Selected Pitchers", type="primary"):
+            with st.spinner("Fetching updated pitcher stats..."):
+                for bid, names in override_inputs.items():
+                    home_sp = load_pitcher_stats(names["home_name"]) if names["home_name"] else None
+                    away_sp = load_pitcher_stats(names["away_name"]) if names["away_name"] else None
+                    st.session_state["pitcher_data"][bid] = {
+                        "home": home_sp,
+                        "away": away_sp,
+                        "home_name": names["home_name"],
+                        "away_name": names["away_name"],
+                    }
+            pitcher_data = st.session_state["pitcher_data"]
+            st.success("✅ Pitcher stats updated.")
+            st.rerun()
 
 st.divider()
 
@@ -725,6 +783,17 @@ if "real_slip" not in st.session_state:
 if "paper_slip" not in st.session_state:
     st.session_state["paper_slip"] = []
 
+def _clear_real_slip():
+    """Remove every real-bet selection and its per-game stake/side/book inputs."""
+    for bid in list(st.session_state.get("real_slip", [])):
+        for k in (f"stake_{bid}", f"side_{bid}", f"book_{bid}"):
+            st.session_state.pop(k, None)
+    st.session_state["real_slip"] = []
+
+def _clear_paper_slip():
+    """Remove every paper-bet selection."""
+    st.session_state["paper_slip"] = []
+
 # Pre-fill stake suggestions whenever the slip or budget changes.
 # Read budget from session state (set by the sidebar widgets below, which rendered
 # on the *previous* run via Streamlit's top-down model).
@@ -827,7 +896,7 @@ for base_id, entries in sorted_games:
 
     pitcher_badge_html = '<span class="pitcher-badge">🎯 Pitcher-Enhanced</span>' if sample["has_pitchers"] else ""
     pf_badge      = park_factor_badge(sample["home_team"])
-    wx_data       = load_weather(sample["home_team"])
+    wx_data       = weather_data.get(sample["home_team"])
     wx_badge_html = weather_badges(wx_data)
     ctx_html      = ""
     if pf_badge or wx_badge_html:
@@ -838,8 +907,8 @@ for base_id, entries in sorted_games:
     away_l10_color = _l10_color(away_l10)
     home_l10_color = _l10_color(home_l10)
 
-    h2h_data    = load_h2h(sample["home_team"], sample["away_team"])
-    h2h_section = h2h_html(h2h_data, sample["home_team"], sample["away_team"])
+    h2h_games   = h2h_data.get(base_id, [])
+    h2h_section = h2h_html(h2h_games, sample["home_team"], sample["away_team"])
 
     _at = sample["away_team"]
     _ht = sample["home_team"]
@@ -884,40 +953,59 @@ for base_id, entries in sorted_games:
                 st.session_state[_insight_key] = justify_prediction(sample, home_l10, away_l10, stats_df)
             st.rerun()
 
-    # Odds table
-    hcols = st.columns([2, 1.4, 1.4, 1.8, 1.8, 2])
-    hcols[0].markdown("**Book**")
-    hcols[1].markdown(f"**{sample['away_team']}**")
-    hcols[2].markdown(f"**{sample['home_team']}**")
-    hcols[3].markdown("**Market Prob**")
-    hcols[4].markdown("**Model Prob**")
-    hcols[5].markdown("**Signal**")
-
+    # Odds table — responsive .rtable: clean grid on desktop, stacked cards on phones
+    _away_lbl = html.escape(sample["away_team"])
+    _home_lbl = html.escape(sample["home_team"])
+    _head = (
+        "<th>Book</th>"
+        f'<th class="num">{_away_lbl}</th>'
+        f'<th class="num">{_home_lbl}</th>'
+        '<th class="num">Market Prob</th>'
+        '<th class="num">Model Prob</th>'
+        "<th>Signal</th>"
+    )
+    _rows = []
     for e in entries:
-        cols = st.columns([2, 1.4, 1.4, 1.8, 1.8, 2])
-        cols[0].markdown(book_badge_html(e["bookmaker_key"], e["bookmaker"]), unsafe_allow_html=True)
-        cols[1].markdown(f"`{fmt_ml(e['away_ml'])}`")
-        cols[2].markdown(f"`{fmt_ml(e['home_ml'])}`")
-        cols[3].markdown(f"{fmt_pct(e['away_implied_prob'])} / {fmt_pct(e['home_implied_prob'])}")
-
         away_cls = edge_class(e["away_edge"])
         home_cls = edge_class(e["home_edge"])
-        cols[4].markdown(
-            f'<span class="{away_cls}">{fmt_pct(e["away_model_prob"])}</span>'
-            f' / <span class="{home_cls}">{fmt_pct(e["home_model_prob"])}</span>',
-            unsafe_allow_html=True,
+        _model = (
+            f'<span class="{away_cls}">{fmt_pct(e["away_model_prob"])}</span> / '
+            f'<span class="{home_cls}">{fmt_pct(e["home_model_prob"])}</span>'
         )
 
         if e["away_has_value"] or e["home_has_value"]:
             if e["away_has_value"] and (not e["home_has_value"] or e["away_edge"] >= e["home_edge"]):
-                sig, kelly, team = e["away_rec"], e["away_kelly"], e["away_team"]
+                _rec, _edge, _kelly, _team = e["away_rec"], e["away_edge"], e["away_kelly"], e["away_team"]
             else:
-                sig, kelly, team = e["home_rec"], e["home_kelly"], e["home_team"]
-            cols[5].markdown(sig)
-            cols[5].caption(f"{team} · Kelly: {kelly*100:.1f}%")
+                _rec, _edge, _kelly, _team = e["home_rec"], e["home_edge"], e["home_kelly"], e["home_team"]
+            _sig = (
+                rec_badge(_rec, _edge)
+                + f'<div class="odds-sig-sub">{html.escape(_team)} · Kelly {_kelly*100:.1f}%</div>'
+            )
+        elif e["home_edge"] >= e["away_edge"]:
+            _sig = rec_badge(e["home_rec"], e["home_edge"])
         else:
-            best_sig = e["home_rec"] if e["home_edge"] >= e["away_edge"] else e["away_rec"]
-            cols[5].markdown(best_sig)
+            _sig = rec_badge(e["away_rec"], e["away_edge"])
+
+        _rows.append(
+            "<tr>"
+            f'<td data-label="Book">{book_badge_html(e["bookmaker_key"], e["bookmaker"])}</td>'
+            f'<td data-label="{_away_lbl}" class="num">{html.escape(fmt_ml(e["away_ml"]))}</td>'
+            f'<td data-label="{_home_lbl}" class="num">{html.escape(fmt_ml(e["home_ml"]))}</td>'
+            f'<td data-label="Market Prob" class="num">{fmt_pct(e["away_implied_prob"])} / {fmt_pct(e["home_implied_prob"])}</td>'
+            f'<td data-label="Model Prob" class="num">{_model}</td>'
+            f'<td data-label="Signal">{_sig}</td>'
+            "</tr>"
+        )
+
+    st.markdown(
+        '<div class="rtable-wrap"><table class="rtable"><thead><tr>'
+        + _head
+        + "</tr></thead><tbody>"
+        + "".join(_rows)
+        + "</tbody></table></div>",
+        unsafe_allow_html=True,
+    )
 
     # Bet slip buttons
     real_in  = base_id in st.session_state["real_slip"]
@@ -959,6 +1047,13 @@ with st.sidebar:
     slip_label = f"🎰 Bet Slip" + (f" · {total_slip}" if total_slip > 0 else "")
     st.markdown(f"### {slip_label}")
 
+    if total_slip > 0:
+        if st.button("🗑️ Clear All", key="clear_all_slip", use_container_width=True,
+                     help="Remove every real and paper selection from the slip"):
+            _clear_real_slip()
+            _clear_paper_slip()
+            st.rerun()
+
     if not real_slip and not paper_slip:
         st.markdown(
             f'<p style="color:{c["muted"]};font-size:0.83rem;line-height:1.5;">'
@@ -970,6 +1065,11 @@ with st.sidebar:
     # ── Real bets ──────────────────────────────────────────────────────────────
     if real_slip:
         st.markdown('<div class="slip-section">💰 Real Bets</div>', unsafe_allow_html=True)
+
+        if st.button("🗑️ Clear Real", key="clear_real_slip", use_container_width=True,
+                     help="Remove all real-bet selections"):
+            _clear_real_slip()
+            st.rerun()
 
         budget = st.number_input(
             "Budget ($)",
@@ -1110,6 +1210,11 @@ with st.sidebar:
     # ── Paper bets ─────────────────────────────────────────────────────────────
     if paper_slip:
         st.markdown('<div class="slip-section">📋 Paper Bets</div>', unsafe_allow_html=True)
+
+        if st.button("🗑️ Clear Paper", key="clear_paper_slip", use_container_width=True,
+                     help="Remove all paper-bet selections"):
+            _clear_paper_slip()
+            st.rerun()
 
         paper_balance = st.number_input(
             "Paper balance ($)",

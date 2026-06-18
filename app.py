@@ -19,6 +19,7 @@ from ingestion.odds_client import fetch_mlb_odds
 from ingestion.stats_scraper import get_full_team_stats
 from models.predictor import MLBPredictor, build_matchup_features, evaluate_value
 from theme import init_theme, palette
+from ui import responsive_table
 
 init_db()
 
@@ -259,12 +260,12 @@ if n_pending > 0:
         st.markdown("**Real Bets**")
         disp = pending_real[["game_date", "away_team", "home_team", "bet_on", "odds", "stake"]].copy()
         disp.columns = ["Date", "Away", "Home", "Bet On", "Odds", "Stake ($)"]
-        st.dataframe(disp, use_container_width=True, hide_index=True)
+        responsive_table(disp, key="home_pending_real", numeric_cols=["Odds", "Stake ($)"])
 
     if not pending_paper.empty:
         st.markdown("**Paper Bets**")
         disp_p = pending_paper[["game_date", "away_team", "home_team", "bet_on", "odds", "stake"]].copy()
         disp_p.columns = ["Date", "Away", "Home", "Bet On", "Odds", "Stake ($)"]
-        st.dataframe(disp_p, use_container_width=True, hide_index=True)
+        responsive_table(disp_p, key="home_pending_paper", numeric_cols=["Odds", "Stake ($)"])
 
 st.caption("⚠️ Model uses season-level stats only — pitcher data on Today's Games page. Not financial advice. Gamble responsibly.")

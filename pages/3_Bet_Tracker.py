@@ -13,6 +13,7 @@ from datetime import date
 from database import get_connection, init_db
 from ingestion.auto_resolver import batch_resolve_bets, refresh_closing_odds, _lookup_closing_odds_cache
 from theme import init_theme, palette
+from ui import responsive_chart, responsive_table
 
 init_db()
 
@@ -318,7 +319,9 @@ if not completed.empty:
                          "stake", "outcome", "profit_loss", "closing_odds", "clv", "notes"]].copy()
     display.columns = ["Date", "Away Team", "Home Team", "Bet On (Team)", "Odds", "Stake ($)",
                        "Outcome", "P&L ($)", "Closing Odds", "CLV", "Notes"]
-    st.dataframe(display, use_container_width=True, hide_index=True)
+    responsive_table(display, key="bt_log",
+                     numeric_cols=["Odds", "Stake ($)", "P&L ($)", "Closing Odds", "CLV"],
+                     signed_cols=["P&L ($)", "CLV"])
 
     st.divider()
 
@@ -349,7 +352,7 @@ if not completed.empty:
         yaxis_title="P&L ($)",
         height=350,
     )
-    st.plotly_chart(fig, use_container_width=True)
+    responsive_chart(fig, key="bt_pnl")
 
     # CLV Distribution
     if completed["clv"].notna().sum() >= 5:
@@ -372,4 +375,4 @@ if not completed.empty:
             height=300,
             font=dict(family="Manrope", color=_c["plot_font"]),
         )
-        st.plotly_chart(fig2, use_container_width=True)
+        responsive_chart(fig2, key="bt_hist")

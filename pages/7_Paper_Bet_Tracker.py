@@ -12,6 +12,7 @@ from datetime import date
 from database import get_connection, init_db
 from ingestion.auto_resolver import batch_resolve_bets, refresh_closing_odds, _lookup_closing_odds_cache
 from theme import init_theme, palette
+from ui import responsive_chart, responsive_table
 
 init_db()
 
@@ -331,7 +332,9 @@ display = bets_raw[["game_date", "away_team", "home_team", "bet_on", "odds",
                      "stake", "outcome", "profit_loss", "closing_odds", "clv", "notes"]].copy()
 display.columns = ["Date", "Away Team", "Home Team", "Bet On", "Odds", "Stake ($)",
                    "Outcome", "P&L ($)", "Closing Odds", "CLV", "Notes"]
-st.dataframe(display, use_container_width=True, hide_index=True)
+responsive_table(display, key="pbt_log",
+                 numeric_cols=["Odds", "Stake ($)", "P&L ($)", "Closing Odds", "CLV"],
+                 signed_cols=["P&L ($)", "CLV"])
 
 # --- Running P&L chart (only when enough data) ---
 if not completed.empty and len(completed) >= 3:
@@ -363,4 +366,4 @@ if not completed.empty and len(completed) >= 3:
         yaxis_title="P&L ($)",
         height=350,
     )
-    st.plotly_chart(fig, use_container_width=True)
+    responsive_chart(fig, key="pbt_pnl")
