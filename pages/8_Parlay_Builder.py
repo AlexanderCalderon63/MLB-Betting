@@ -19,7 +19,7 @@ from theme import init_theme, palette
 init_db()
 
 st.set_page_config(page_title="Parlay Builder", page_icon="🎰", layout="wide")
-init_theme()
+init_theme("#c2410c")   # burnt orange — parlay builder
 
 st.title("🎰 Parlay Builder")
 st.caption("Build model-backed parlays or construct your own — all logged to the Parlay Tracker.")

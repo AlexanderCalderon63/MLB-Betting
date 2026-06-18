@@ -1,5 +1,5 @@
 """
-pages/1_Todays_Games.py — Live odds + model predictions with auto pitcher detection
+pages/1_Todays_Games.py — Live odds + model predictions + integrated bet slip
 """
 
 import sys
@@ -10,45 +10,30 @@ from dotenv import load_dotenv
 load_dotenv(os.path.join(os.path.dirname(__file__), '..', '.env'), override=True)
 
 import streamlit as st
-
-# # DEBUG — remove once confirmed working
-# if "llm_debug" not in st.session_state:
-#     try:
-#         import anthropic as _ac
-#         _client = _ac.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY", ""))
-#         _msg = _client.messages.create(
-#             model="claude-haiku-4-5-20251001",
-#             max_tokens=20,
-#             messages=[{"role": "user", "content": "Say: ok"}],
-#         )
-#         st.session_state["llm_debug"] = f"✅ {_msg.content[0].text}"
-#     except Exception as _e:
-#         st.session_state["llm_debug"] = f"❌ {_e}"
-# st.sidebar.write(st.session_state["llm_debug"])
 from collections import defaultdict
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone, timedelta, date
 
 from ingestion.odds_client import fetch_mlb_odds
 from ingestion.stats_scraper import get_full_team_stats
 from ingestion.pitcher_scraper import search_pitcher, get_team_pitchers, get_probable_pitchers_today, get_head_to_head
 from models.predictor import MLBPredictor, build_matchup_features, evaluate_value
-from database import init_db
-from theme import init_theme
+from database import init_db, get_connection
+from theme import init_theme, palette
 from ingestion.park_weather import park_factor_badge, weather_badges, get_weather
 
 init_db()
 
 st.set_page_config(page_title="Today's Games", page_icon="⚾", layout="wide")
-
-init_theme()
+init_theme("#0e7490")   # cyan — today's games
+c = palette()   # active theme colors — reused by inline HTML + helper functions
 
 st.title("⚾ Today's MLB Games")
-st.caption("Moneylines by sportsbook · Probable starters loaded automatically · Override in the expander if needed")
+st.caption("Live moneylines · Probable starters · Integrated bet slip")
 
 # ── Controls ───────────────────────────────────────────────────────────────────
-col_refresh, col_filter = st.columns([1, 3])
+col_refresh, col_filter, col_tog1, col_tog2 = st.columns([1, 2, 1.5, 2])
 with col_refresh:
-    if st.button("🔄 Refresh Odds", use_container_width=True):
+    if st.button("🔄 Refresh", use_container_width=True):
         st.cache_data.clear()
         for key in [k for k in st.session_state if k.startswith(("llm_", "insight_"))]:
             del st.session_state[key]
@@ -59,11 +44,12 @@ with col_filter:
     filter_book = st.selectbox(
         "Filter by sportsbook",
         ["All Books", "Caesars", "BetMGM"],
+        label_visibility="collapsed",
     )
-
-tog1, tog2 = st.columns(2)
-show_avoid     = tog1.toggle("Show games with no value", value=False)
-show_all_times = tog2.toggle("Show started / other-day games", value=False)
+with col_tog1:
+    show_avoid = st.toggle("Show no-value games", value=False)
+with col_tog2:
+    show_all_times = st.toggle("Show started / other-day", value=False)
 
 st.divider()
 
@@ -91,17 +77,13 @@ def _is_todays_upcoming_game(commence_time: str, grace_minutes: int = 5) -> bool
     try:
         dt_utc = datetime.fromisoformat(commence_time.replace("Z", "+00:00"))
         now_utc = datetime.now(timezone.utc)
-
         if dt_utc <= now_utc - timedelta(minutes=grace_minutes):
             return False
-
         local_tz = datetime.now().astimezone().tzinfo
         dt_local  = dt_utc.astimezone(local_tz)
         now_local = datetime.now(local_tz)
-
         today_start = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
         today_end   = today_start + timedelta(hours=26)
-
         return today_start <= dt_local < today_end
     except Exception:
         return True
@@ -119,7 +101,7 @@ if not odds_list:
     st.warning("No upcoming games for today. Check back tomorrow morning when lines are posted.")
     st.stop()
 
-# Deduplicate to one entry per base game
+# Deduplicate to one entry per base game (prefer Caesars)
 seen = {}
 for g in odds_list:
     bid = g["base_game_id"]
@@ -130,12 +112,10 @@ unique_games = list(seen.values())
 # ── Auto-load probable pitchers ────────────────────────────────────────────────
 @st.cache_data(ttl=1800)
 def load_probable_pitchers(date_str: str) -> dict:
-    """Fetch probable starters from MLB Stats API. Cached 30 min."""
     return get_probable_pitchers_today(date_str)
 
 @st.cache_data(ttl=3600)
 def load_pitcher_stats(name: str) -> dict:
-    """Fetch season + recent stats for a pitcher. Cached 1 hour."""
     return search_pitcher(name)
 
 @st.cache_data(ttl=3600)
@@ -157,7 +137,6 @@ def load_weather(home_team: str) -> dict | None:
 
 today_str = datetime.now().strftime("%Y-%m-%d")
 
-# Auto-fetch probable pitchers once per session (or after refresh)
 if "pitchers_loaded" not in st.session_state:
     with st.spinner("Loading probable starters..."):
         probable = load_probable_pitchers(today_str)
@@ -167,10 +146,8 @@ if "pitchers_loaded" not in st.session_state:
         bid = g["base_game_id"]
         home_name = probable.get(g["home_team"])
         away_name = probable.get(g["away_team"])
-
         home_sp = load_pitcher_stats(home_name) if home_name else None
         away_sp = load_pitcher_stats(away_name) if away_name else None
-
         pitcher_data[bid] = {
             "home": home_sp,
             "away": away_sp,
@@ -207,11 +184,8 @@ with st.expander("🔄 Override Starting Pitchers", expanded=False):
             home_options = ["— Select pitcher —"] + home_roster
             home_default = home_options.index(home_probable) if home_probable in home_options else 0
             home_sel = st.selectbox(
-                f"home_{bid}",
-                options=home_options,
-                index=home_default,
-                key=f"hp_{bid}",
-                label_visibility="collapsed",
+                f"home_{bid}", options=home_options, index=home_default,
+                key=f"hp_{bid}", label_visibility="collapsed",
             )
 
         with c2:
@@ -219,11 +193,8 @@ with st.expander("🔄 Override Starting Pitchers", expanded=False):
             away_options = ["— Select pitcher —"] + away_roster
             away_default = away_options.index(away_probable) if away_probable in away_options else 0
             away_sel = st.selectbox(
-                f"away_{bid}",
-                options=away_options,
-                index=away_default,
-                key=f"ap_{bid}",
-                label_visibility="collapsed",
+                f"away_{bid}", options=away_options, index=away_default,
+                key=f"ap_{bid}", label_visibility="collapsed",
             )
 
         override_inputs[bid] = {
@@ -266,12 +237,14 @@ for game in odds_list:
             home_pitcher=home_sp,
             away_pitcher=away_sp,
         )
+        feat_dict = features.iloc[0].to_dict() if features is not None else {}
         home_prob = predictor.predict_proba(features)
         model_cache[bid] = {
             "home_prob":    home_prob,
             "has_pitchers": home_sp is not None and away_sp is not None,
             "home_sp":      home_sp,
             "away_sp":      away_sp,
+            "features":     feat_dict,
         }
 
     cached    = model_cache[bid]
@@ -296,6 +269,7 @@ for game in odds_list:
         "has_pitchers":    cached["has_pitchers"],
         "home_sp":         cached.get("home_sp"),
         "away_sp":         cached.get("away_sp"),
+        "features":        cached.get("features", {}),
     })
 
 # Group by base game
@@ -308,6 +282,15 @@ def game_best_edge(entries):
 
 sorted_games = sorted(games_grouped.items(), key=lambda x: game_best_edge(x[1]), reverse=True)
 
+# Build lookup dicts (Caesars preferred per game)
+game_best = {}
+books_by_game = defaultdict(list)
+for base_id, entries in sorted_games:
+    books_by_game[base_id] = entries
+    caesars = next((e for e in entries if e["bookmaker_key"] == "caesars"), entries[0])
+    game_best[base_id] = caesars
+
+# ── Summary metrics ────────────────────────────────────────────────────────────
 total_games   = len(sorted_games)
 value_games   = sum(1 for _, e in sorted_games if any(x["home_has_value"] or x["away_has_value"] for x in e))
 pitcher_games = sum(1 for _, e in sorted_games if e[0]["has_pitchers"])
@@ -324,6 +307,23 @@ st.divider()
 # ── Helpers ────────────────────────────────────────────────────────────────────
 def fmt_ml(o):  return f"+{o}" if o > 0 else str(o)
 def fmt_pct(p): return f"{p*100:.1f}%"
+
+def calc_payout(stake, odds):
+    if odds > 0:
+        return round(stake * odds / 100, 2)
+    return round(stake * 100 / abs(odds), 2)
+
+def rec_badge(rec, edge):
+    if edge >= 0.08:   return f'<span class="rec-badge rec-hot">{rec}</span>'
+    elif edge >= 0.04: return f'<span class="rec-badge rec-value">{rec}</span>'
+    elif edge >= 0.01: return f'<span class="rec-badge rec-edge">{rec}</span>'
+    return f'<span class="rec-badge rec-none">{rec}</span>'
+
+def game_signal_class(best_edge):
+    if best_edge >= 0.08: return "signal-hot"
+    if best_edge >= 0.04: return "signal-value"
+    if best_edge >= 0.01: return "signal-edge"
+    return "signal-none"
 
 def fmt_last_ten(team: str) -> str:
     s = stats_df.copy()
@@ -350,7 +350,6 @@ def book_badge_html(key, name):
     return f'<span class="book-badge {cls}">{name}</span>'
 
 def _read_anthropic_key() -> str:
-    """Read ANTHROPIC_API_KEY directly from .env file, falling back to os.environ."""
     key = os.getenv("ANTHROPIC_API_KEY", "")
     if key:
         return key
@@ -513,7 +512,6 @@ def justify_prediction(g: dict, home_l10: str, away_l10: str, stats_df=None) -> 
     dog_ql   = sp_label(dog_sp)
     has_pitchers = g.get("has_pitchers") and fav_sp and dog_sp
 
-    # ── LLM commentary (Haiku) — falls back to procedural if key missing ──────
     if dog_has_v and dog_e >= 0.04:   _vt = "strong_dog"
     elif dog_has_v:                    _vt = "moderate_dog"
     elif fav_has_v and fav_e >= 0.08: _vt = "strong_fav"
@@ -541,9 +539,8 @@ def justify_prediction(g: dict, home_l10: str, away_l10: str, stats_df=None) -> 
     _llm = _llm_justify(fav, dog, _vt, _pctx, _fctx, _sctx)
     if _llm:
         return _llm
-    # ─────────────────────────────────────────────────────────────────────────
 
-    # Sentence 1 — value read (phrase pool seeded by game_id)
+    # Procedural fallback
     if dog_has_v and dog_e >= 0.04:
         s1 = pick([
             f"The market is overvaluing {fav} here — the model finds genuine value on the underdog {dog}.",
@@ -581,7 +578,6 @@ def justify_prediction(g: dict, home_l10: str, away_l10: str, stats_df=None) -> 
             f"This is close to a fair game — the model leans {fav} but isn't finding a meaningful edge at this line.",
         ])
 
-    # Sentence 2 — pitcher > pythag > form > run_diff > generic
     if has_pitchers and fav_ql and dog_ql:
         fav_poor   = any(x in fav_ql for x in ("average", "struggling"))
         dog_poor   = any(x in dog_ql for x in ("average", "struggling"))
@@ -591,31 +587,26 @@ def justify_prediction(g: dict, home_l10: str, away_l10: str, stats_df=None) -> 
             s2 = pick([
                 f"{fav} has a clear pitching edge — their starter has been {fav_ql} while the opposition has been {dog_ql}.",
                 f"The pitching matchup strongly favors {fav}: a {fav_ql.split(',')[0]} arm against {dog}'s {dog_ql.split(',')[0]} starter.",
-                f"{fav}'s starter has been {fav_ql}, and that advantage on the mound is a key part of the model's read.",
             ])
         elif dog_strong and fav_poor:
             s2 = pick([
                 f"{dog}'s {dog_ql.split(',')[0]} starter is the main reason for the lean — they carry a real pitching edge.",
                 f"The pitching matchup is the wildcard — {dog} sends a {dog_ql.split(',')[0]} arm against {fav}'s {fav_ql.split(',')[0]} starter.",
-                f"Don't sleep on {dog}'s starter — {dog_ql}, which complicates the edge despite {fav}'s overall advantage.",
             ])
         elif fav_strong:
             s2 = pick([
                 f"{fav}'s starter has been {fav_ql}, giving them a slight pitching edge even against a solid opponent.",
                 f"The pitching edge goes to {fav} — their {fav_ql.split(',')[0]} starter adds another layer to the lean.",
-                f"{fav} also gets the nod on the mound — their starter has been {fav_ql}.",
             ])
         elif dog_strong:
             s2 = pick([
                 f"{dog} counters with a {dog_ql.split(',')[0]} arm, which tempers the edge despite the overall lean.",
                 f"{dog}'s starter has been {dog_ql} — keep an eye on the pitching matchup before the lean feels clean.",
-                f"The mound edge goes to {dog} in this one, which is the main reason this isn't a stronger call.",
             ])
         else:
             s2 = pick([
                 f"Both starters have been {fav_ql.split(',')[0]} — team-level quality is the main differentiator.",
                 f"The pitching matchup is fairly even, so lineup depth and recent form carry the model's decision.",
-                f"With comparable arms on both sides, the edge comes from what these teams have shown over the full season.",
             ])
     elif (pythag := _pythag_note(fav_stats, dog_stats, fav, dog)):
         s2 = pythag + "."
@@ -624,19 +615,16 @@ def justify_prediction(g: dict, home_l10: str, away_l10: str, stats_df=None) -> 
             s2 = pick([
                 f"{fav} has been {fav_form} while {dog} has been {dog_form}, reinforcing the model's direction.",
                 f"Recent form lines up with the lean — {fav} {fav_form}, {dog} {dog_form} over the last ten games.",
-                f"The form picture backs the model: {fav} {fav_form} and {dog} {dog_form} lately.",
             ])
         elif fav_form:
             s2 = pick([
                 f"{fav} has been {fav_form} lately, which aligns with the model's lean.",
                 f"The recent run from {fav} reinforces the call — they've been {fav_form}.",
-                f"{fav} comes in {fav_form}, adding weight to a model that already prefers them.",
             ])
         else:
             s2 = pick([
                 f"{dog} has been {dog_form} — worth noting against a team the model already prefers.",
                 f"The concern with the lean is {dog}'s recent stretch — they've been {dog_form}.",
-                f"{dog}'s form is the thing to watch — they've been {dog_form}, which complicates the edge.",
             ])
     else:
         rd_note = _run_diff_note(fav_stats, fav) or _run_diff_note(dog_stats, dog)
@@ -646,7 +634,6 @@ def justify_prediction(g: dict, home_l10: str, away_l10: str, stats_df=None) -> 
             s2 = pick([
                 "The lean is driven by season-level team quality — no strong recent-form signal either way.",
                 "It comes down to overall team strength, with no single recent factor driving the decision.",
-                "The model is reading from longer-term trends here, with no clear recent catalyst in either direction.",
             ])
 
     return f"{s1} {s2}"
@@ -660,7 +647,6 @@ def h2h_html(games: list[dict], home_team: str, away_team: str) -> str:
 
     home_nick = home_team.split()[-1]
     away_nick = away_team.split()[-1]
-
     home_wins = sum(1 for g in games if g["winner"].split()[-1] == home_nick)
     away_wins = len(games) - home_wins
 
@@ -678,12 +664,12 @@ def h2h_html(games: list[dict], home_team: str, away_team: str) -> str:
         score  = f"{g['away_score']}–{g['home_score']}"
         w_nick = g["winner"].split()[-1]
 
-        if w_nick == home_nick:   w_color = "#68d391"
-        elif w_nick == away_nick: w_color = "#fc8181"
-        else:                     w_color = "#a0aec0"
+        if w_nick == home_nick:   w_color = c["green"]
+        elif w_nick == away_nick: w_color = c["red"]
+        else:                     w_color = c["muted"]
 
         rows += (
-            f'<div style="display:flex;gap:12px;padding:1px 0;font-size:0.73rem;color:#a0aec0;line-height:1.7;">'
+            f'<div style="display:flex;gap:12px;padding:1px 0;font-size:0.73rem;color:{c["muted"]};line-height:1.7;">'
             f'<span style="min-width:90px;flex-shrink:0;">{date_str}</span>'
             f'<span style="min-width:105px;flex-shrink:0;">{g_away_nick} @ {g_home_nick}</span>'
             f'<span style="min-width:36px;font-variant-numeric:tabular-nums;">{score}</span>'
@@ -693,9 +679,9 @@ def h2h_html(games: list[dict], home_team: str, away_team: str) -> str:
 
     record = f"{away_nick} {away_wins}–{home_wins} {home_nick}"
     return (
-        f'<div style="margin-top:10px;padding-top:8px;border-top:1px solid #2d3748;">'
+        f'<div style="margin-top:10px;padding-top:8px;border-top:1px solid {c["border"]};">'
         f'<div style="display:flex;justify-content:space-between;font-size:0.71rem;'
-        f'text-transform:uppercase;letter-spacing:0.04em;color:#718096;margin-bottom:5px;">'
+        f'text-transform:uppercase;letter-spacing:0.04em;color:{c["muted"]};margin-bottom:5px;">'
         f'<span>Last {len(games)} Meetings</span><span>{record}</span></div>'
         f'{rows}'
         f'</div>'
@@ -718,7 +704,7 @@ def pitcher_card_html(sp: dict, team: str, is_home: bool) -> str:
     return f"""
     <div class="pitcher-box">
         <div>
-            <span style="color:#718096; font-size:0.75rem; text-transform:uppercase; letter-spacing:0.05em;">{role} · {team}</span><br>
+            <span style="color:{c['muted']}; font-size:0.75rem; text-transform:uppercase; letter-spacing:0.05em;">{role} · {team}</span><br>
             <span class="pitcher-name">{sp.get('name','')}</span> &nbsp;·&nbsp; {trend}
         </div>
         <div class="pitcher-stat" style="margin-top:4px;">
@@ -733,13 +719,99 @@ def pitcher_card_html(sp: dict, team: str, is_home: bool) -> str:
     </div>
     """
 
+# ── Init slip state ────────────────────────────────────────────────────────────
+if "real_slip" not in st.session_state:
+    st.session_state["real_slip"] = []
+if "paper_slip" not in st.session_state:
+    st.session_state["paper_slip"] = []
+
+# Pre-fill stake suggestions whenever the slip or budget changes.
+# Read budget from session state (set by the sidebar widgets below, which rendered
+# on the *previous* run via Streamlit's top-down model).
+_budget       = float(st.session_state.get("budget_real", 50.0))
+_paper_bal    = float(st.session_state.get("budget_paper", 100.0))
+_real_slip    = st.session_state["real_slip"]
+
+_real_ctx = (tuple(_real_slip), _budget)
+if st.session_state.get("_real_ctx") != _real_ctx and _real_slip:
+    st.session_state["_real_ctx"] = _real_ctx
+    valid = [b for b in _real_slip if b in game_best]
+    if valid:
+        raw = [max(game_best[b]["home_edge"] if game_best[b]["home_edge"] >= game_best[b]["away_edge"]
+                   else game_best[b]["away_edge"], 0.01) for b in valid]
+        total_e = sum(raw)
+        sugg = [round(_budget * e / total_e, 2) for e in raw]
+        sugg[-1] = round(_budget - sum(sugg[:-1]), 2)
+        for bid, s in zip(valid, sugg):
+            st.session_state[f"stake_{bid}"] = float(s)
+
+# ── Visible games + Select All controls ────────────────────────────────────────
+# Games that actually render as cards (mirrors the per-card filter below).
+visible_ids = [
+    base_id for base_id, entries in sorted_games
+    if show_avoid
+    or game_best_edge(entries) >= -0.02
+    or any(e["home_has_value"] or e["away_has_value"] for e in entries)
+]
+
+def _toggle_select_all(slip_key: str):
+    """Select all visible games into the slip, or deselect all if already full."""
+    slip = st.session_state[slip_key]
+    all_selected = bool(visible_ids) and all(b in slip for b in visible_ids)
+    if all_selected:
+        for b in visible_ids:
+            if b in slip:
+                slip.remove(b)
+            if slip_key == "real_slip":
+                st.session_state.pop(f"stake_{b}", None)
+    else:
+        for b in visible_ids:
+            if b not in slip:
+                slip.append(b)
+
+_all_real  = bool(visible_ids) and all(b in st.session_state["real_slip"]  for b in visible_ids)
+_all_paper = bool(visible_ids) and all(b in st.session_state["paper_slip"] for b in visible_ids)
+
+sa1, sa2, _sa3 = st.columns([1.6, 1.6, 4])
+with sa1:
+    if st.button(
+        "✓ Deselect All Real" if _all_real else "💰 Select All Real",
+        key="select_all_real",
+        type="primary" if _all_real else "secondary",
+        use_container_width=True,
+        disabled=not visible_ids,
+    ):
+        _toggle_select_all("real_slip")
+        st.rerun()
+with sa2:
+    if st.button(
+        "✓ Deselect All Paper" if _all_paper else "📋 Select All Paper",
+        key="select_all_paper",
+        type="primary" if _all_paper else "secondary",
+        use_container_width=True,
+        disabled=not visible_ids,
+    ):
+        _toggle_select_all("paper_slip")
+        st.rerun()
+
 # ── Game cards ─────────────────────────────────────────────────────────────────
+def _l10_color(record: str) -> str:
+    try:
+        w = int(record.split("-")[0])
+        if w >= 7: return c["green"]
+        if w <= 3: return c["red"]
+    except Exception:
+        pass
+    return c["muted"]
+
 for base_id, entries in sorted_games:
     sample    = entries[0]
     best_edge = game_best_edge(entries)
 
     if not show_avoid and best_edge < -0.02 and not any(e["home_has_value"] or e["away_has_value"] for e in entries):
         continue
+
+    signal_cls = game_signal_class(best_edge)
 
     try:
         dt = datetime.fromisoformat(sample["commence_time"].replace("Z", "+00:00"))
@@ -753,53 +825,42 @@ for base_id, entries in sorted_games:
     except Exception:
         time_str = ""
 
-    pitcher_badge = " 🎯 Pitcher-Enhanced" if sample["has_pitchers"] else ""
-
-    pf_badge       = park_factor_badge(sample["home_team"])
-    wx_data        = load_weather(sample["home_team"])
-    wx_badge_html  = weather_badges(wx_data)
-    ctx_html       = ""
+    pitcher_badge_html = '<span class="pitcher-badge">🎯 Pitcher-Enhanced</span>' if sample["has_pitchers"] else ""
+    pf_badge      = park_factor_badge(sample["home_team"])
+    wx_data       = load_weather(sample["home_team"])
+    wx_badge_html = weather_badges(wx_data)
+    ctx_html      = ""
     if pf_badge or wx_badge_html:
         ctx_html = f'<div class="context-row">{pf_badge} {wx_badge_html}</div>'
 
-    away_l10 = fmt_last_ten(sample["away_team"])
-    home_l10 = fmt_last_ten(sample["home_team"])
-
-    def _l10_color(record: str) -> str:
-        try:
-            w = int(record.split("-")[0])
-            if w >= 7: return "#68d391"
-            if w <= 3: return "#fc8181"
-        except Exception:
-            pass
-        return "#a0aec0"
-
+    away_l10       = fmt_last_ten(sample["away_team"])
+    home_l10       = fmt_last_ten(sample["home_team"])
     away_l10_color = _l10_color(away_l10)
     home_l10_color = _l10_color(home_l10)
 
     h2h_data    = load_h2h(sample["home_team"], sample["away_team"])
     h2h_section = h2h_html(h2h_data, sample["home_team"], sample["away_team"])
 
-    _at  = sample["away_team"]
-    _ht  = sample["home_team"]
-    game_html = "".join([
-        '<div class="game-block">',
-        f'<div style="font-size:1.1rem;font-weight:800;color:#e2e8f0;">',
-        f'⚾ {_at} <span style="color:#4a5568">@</span> {_ht}',
-        f'<span style="font-size:0.75rem;color:#68d391;font-weight:400;">{pitcher_badge}</span>',
-        '</div>',
-        f'<div style="font-size:0.8rem;color:#718096;margin-bottom:0.2rem;">🕐 {time_str}</div>',
-        '<div style="font-size:0.78rem;color:#a0aec0;margin-bottom:0.4rem;">',
-        f'Last 10 &nbsp;—&nbsp;<strong>{_at}</strong>: ',
-        f'<span style="color:{away_l10_color};font-weight:700;">{away_l10}</span>',
-        f'&nbsp;·&nbsp;<strong>{_ht}</strong>: ',
-        f'<span style="color:{home_l10_color};font-weight:700;">{home_l10}</span>',
-        '</div>',
-        ctx_html,
-        h2h_section,
-        '</div>',
-    ])
-    st.markdown(game_html, unsafe_allow_html=True)
+    _at = sample["away_team"]
+    _ht = sample["home_team"]
+
+    st.markdown(f"""
+<div class="game-block {signal_cls}">
+  <div class="game-matchup">
+    {_at} <span class="game-at">@</span> {_ht}
+    {pitcher_badge_html}
+  </div>
+  <div class="game-meta">🕐 {time_str}</div>
+  <div style="font-size:0.78rem;color:{c['muted']};margin-bottom:0.4rem;">
+    Last 10 &nbsp;—&nbsp;<strong style="color:{c['text2']};">{_at}</strong>:&nbsp;
+    <span style="color:{away_l10_color};font-weight:700;">{away_l10}</span>
+    &nbsp;·&nbsp;<strong style="color:{c['text2']};">{_ht}</strong>:&nbsp;
+    <span style="color:{home_l10_color};font-weight:700;">{home_l10}</span>
+  </div>
+  {ctx_html}
+  {h2h_section}
+</div>
+""", unsafe_allow_html=True)
 
     if sample["has_pitchers"]:
         pc1, pc2 = st.columns(2)
@@ -808,11 +869,12 @@ for base_id, entries in sorted_games:
         with pc2:
             st.markdown(pitcher_card_html(sample["away_sp"], sample["away_team"], is_home=False), unsafe_allow_html=True)
 
+    # AI insight
     _insight_key = f"insight_{base_id}"
     if _insight_key in st.session_state:
         st.markdown(
             f'<div style="font-size:0.97rem;line-height:1.65;padding:10px 16px;'
-            f'border-left:3px solid #4a9eff;margin:10px 0 6px 0;font-style:italic;opacity:0.92;">'
+            f'border-left:3px solid {c["accent"]};margin:10px 0 6px 0;font-style:italic;opacity:0.92;">'
             f'💡 {st.session_state[_insight_key]}</div>',
             unsafe_allow_html=True,
         )
@@ -822,6 +884,7 @@ for base_id, entries in sorted_games:
                 st.session_state[_insight_key] = justify_prediction(sample, home_l10, away_l10, stats_df)
             st.rerun()
 
+    # Odds table
     hcols = st.columns([2, 1.4, 1.4, 1.8, 1.8, 2])
     hcols[0].markdown("**Book**")
     hcols[1].markdown(f"**{sample['away_team']}**")
@@ -856,6 +919,293 @@ for base_id, entries in sorted_games:
             best_sig = e["home_rec"] if e["home_edge"] >= e["away_edge"] else e["away_rec"]
             cols[5].markdown(best_sig)
 
+    # Bet slip buttons
+    real_in  = base_id in st.session_state["real_slip"]
+    paper_in = base_id in st.session_state["paper_slip"]
+
+    bc1, bc2, _ = st.columns([1.3, 1.3, 5])
+    with bc1:
+        if real_in:
+            if st.button("✓ Real Added", key=f"rb_{base_id}", type="primary", use_container_width=True):
+                st.session_state["real_slip"].remove(base_id)
+                st.session_state.pop(f"stake_{base_id}", None)
+                st.rerun()
+        else:
+            if st.button("💰 Real Bet", key=f"rb_{base_id}", use_container_width=True):
+                st.session_state["real_slip"].append(base_id)
+                st.rerun()
+
+    with bc2:
+        if paper_in:
+            if st.button("✓ Paper Added", key=f"pb_{base_id}", type="primary", use_container_width=True):
+                st.session_state["paper_slip"].remove(base_id)
+                st.rerun()
+        else:
+            if st.button("📋 Paper Bet", key=f"pb_{base_id}", use_container_width=True):
+                st.session_state["paper_slip"].append(base_id)
+                st.rerun()
+
     st.markdown("---")
 
 st.caption("⚠️ Model uses season-level stats + pitcher data when available. Not financial advice. Gamble responsibly.")
+
+# ── Sidebar: Bet Slip ─────────────────────────────────────────────────────────
+# This block runs after all game data is computed, so game_best is fully populated.
+real_slip  = st.session_state["real_slip"]
+paper_slip = st.session_state["paper_slip"]
+
+with st.sidebar:
+    total_slip = len(real_slip) + len(paper_slip)
+    slip_label = f"🎰 Bet Slip" + (f" · {total_slip}" if total_slip > 0 else "")
+    st.markdown(f"### {slip_label}")
+
+    if not real_slip and not paper_slip:
+        st.markdown(
+            f'<p style="color:{c["muted"]};font-size:0.83rem;line-height:1.5;">'
+            'Use <strong>💰 Real Bet</strong> or <strong>📋 Paper Bet</strong> '
+            'buttons on any game card to add bets here.</p>',
+            unsafe_allow_html=True,
+        )
+
+    # ── Real bets ──────────────────────────────────────────────────────────────
+    if real_slip:
+        st.markdown('<div class="slip-section">💰 Real Bets</div>', unsafe_allow_html=True)
+
+        budget = st.number_input(
+            "Budget ($)",
+            min_value=1.0, max_value=100_000.0, value=50.0, step=5.0,
+            key="budget_real",
+        )
+
+        real_configs = {}
+        for bid in real_slip:
+            if bid not in game_best:
+                continue
+            g     = game_best[bid]
+            books = books_by_game.get(bid, [g])
+            book_names = [b["bookmaker"] for b in books]
+
+            short_away = g["away_team"].split()[-1]
+            short_home = g["home_team"].split()[-1]
+
+            lbl_col, x_col = st.columns([5, 1], vertical_alignment="center")
+            with lbl_col:
+                st.markdown(
+                    f'<div class="slip-game-label">{short_away} @ {short_home}</div>',
+                    unsafe_allow_html=True,
+                )
+            with x_col:
+                if st.button("✕", key=f"rm_real_{bid}", help="Remove from slip"):
+                    if bid in st.session_state["real_slip"]:
+                        st.session_state["real_slip"].remove(bid)
+                    for k in (f"stake_{bid}", f"side_{bid}", f"book_{bid}"):
+                        st.session_state.pop(k, None)
+                    st.rerun()
+
+            rec_idx = 0 if g["home_edge"] >= g["away_edge"] else 1
+            side_opts = [g["home_team"], g["away_team"]]
+            side = st.radio(
+                f"Side",
+                side_opts,
+                index=rec_idx,
+                key=f"side_{bid}",
+                horizontal=True,
+                label_visibility="collapsed",
+                format_func=lambda x: x.split()[-1],
+            )
+
+            default_book_idx = next(
+                (i for i, b in enumerate(books) if b["bookmaker_key"] == "caesars"), 0
+            )
+            book_name = st.selectbox(
+                "Book",
+                book_names,
+                index=default_book_idx,
+                key=f"book_{bid}",
+                label_visibility="collapsed",
+            )
+            sel_book = next((b for b in books if b["bookmaker"] == book_name), books[0])
+
+            is_home    = (side == g["home_team"])
+            ch_odds    = sel_book["home_ml"]    if is_home else sel_book["away_ml"]
+            ch_edge    = g["home_edge"]         if is_home else g["away_edge"]
+            ch_prob    = g["home_model_prob"]   if is_home else g["away_model_prob"]
+            ch_impl    = g["home_implied_prob"] if is_home else g["away_implied_prob"]
+
+            stake = st.number_input(
+                "Stake ($)",
+                min_value=0.0, step=1.0, format="%.2f",
+                key=f"stake_{bid}",
+            )
+
+            payout = calc_payout(stake, ch_odds) if stake > 0 else 0.0
+            e_color = c["green"] if ch_edge >= 0.04 else c["amber"] if ch_edge >= 0.01 else c["muted"]
+            win_txt = f" · Win: +${payout:.2f}" if stake > 0 else ""
+            st.markdown(
+                f'<div class="slip-meta" style="color:{e_color};">'
+                f'{fmt_ml(ch_odds)} &nbsp;·&nbsp; Edge: {ch_edge*100:+.1f}%{win_txt}</div>',
+                unsafe_allow_html=True,
+            )
+
+            real_configs[bid] = {
+                "game":       g,
+                "team":       side,
+                "odds":       ch_odds,
+                "edge":       ch_edge,
+                "model_prob": ch_prob,
+                "impl_prob":  ch_impl,
+                "stake":      stake,
+                "bookmaker":  book_name,
+                "features":   game_best[bid].get("features", {}),
+            }
+
+        # Real summary
+        total_real  = sum(rc["stake"] for rc in real_configs.values())
+        active_real = {b: rc for b, rc in real_configs.items() if rc["stake"] > 0}
+        if total_real > 0:
+            ev = sum(
+                rc["stake"] * (rc["model_prob"] * calc_payout(1, rc["odds"]) - (1 - rc["model_prob"]))
+                for rc in active_real.values()
+            )
+            over    = total_real > budget + 0.01
+            t_color = c["red"] if over else c["text"]
+            st.markdown(
+                f'<div class="slip-summary">'
+                f'<span style="color:{t_color};">Total: <strong>${total_real:.2f}</strong> / ${budget:.2f}</span>'
+                f'<br><span style="color:{c["muted"]};font-size:0.75rem;">EV: {"+" if ev >= 0 else ""}${ev:.2f}</span>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+
+        if st.button("💰 Log Real Bets", type="primary", use_container_width=True, key="log_real"):
+            conn = get_connection()
+            logged = 0
+            for bid, rc in real_configs.items():
+                if rc["stake"] == 0:
+                    continue
+                g = rc["game"]
+                conn.execute("""
+                    INSERT INTO bets
+                        (game_date, home_team, away_team, bet_on, odds, stake, model_prob, implied_prob, notes)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    str(date.today()),
+                    g["home_team"], g["away_team"], rc["team"],
+                    int(rc["odds"]), rc["stake"], rc["model_prob"], rc["impl_prob"],
+                    f"Via {rc['bookmaker']} · Edge: {rc['edge']*100:+.1f}%",
+                ))
+                logged += 1
+            conn.commit()
+            conn.close()
+            if logged:
+                st.success(f"✅ {logged} bet(s) logged!")
+                for bid in list(real_configs.keys()):
+                    for k in [f"stake_{bid}", f"side_{bid}", f"book_{bid}"]:
+                        st.session_state.pop(k, None)
+                st.session_state["real_slip"] = []
+                st.rerun()
+
+        st.divider()
+
+    # ── Paper bets ─────────────────────────────────────────────────────────────
+    if paper_slip:
+        st.markdown('<div class="slip-section">📋 Paper Bets</div>', unsafe_allow_html=True)
+
+        paper_balance = st.number_input(
+            "Paper balance ($)",
+            min_value=1.0, max_value=100_000.0, value=100.0, step=5.0,
+            key="budget_paper",
+        )
+
+        # Build paper rows with auto-allocation
+        paper_items = []
+        for bid in paper_slip:
+            if bid not in game_best:
+                continue
+            g       = game_best[bid]
+            is_home = g["home_edge"] >= g["away_edge"]
+            rec_edge = max(g["home_edge"] if is_home else g["away_edge"], 0.01)
+            paper_items.append({
+                "bid":      bid,
+                "g":        g,
+                "is_home":  is_home,
+                "rec_edge": rec_edge,
+                "rec_team": g["home_team"]        if is_home else g["away_team"],
+                "rec_odds": g["home_ml"]           if is_home else g["away_ml"],
+                "model_p":  g["home_model_prob"]   if is_home else g["away_model_prob"],
+                "impl_p":   g["home_implied_prob"] if is_home else g["away_implied_prob"],
+                "rec_text": g["home_rec"]          if is_home else g["away_rec"],
+                "features": game_best[bid].get("features", {}),
+            })
+
+        if paper_items:
+            total_edge_p = sum(item["rec_edge"] for item in paper_items)
+            for i, item in enumerate(paper_items):
+                item["stake"] = round(paper_balance * item["rec_edge"] / total_edge_p, 2)
+            paper_items[-1]["stake"] = round(
+                paper_balance - sum(item["stake"] for item in paper_items[:-1]), 2
+            )
+            for item in paper_items:
+                item["payout"] = calc_payout(item["stake"], item["rec_odds"])
+
+            total_paper = sum(item["stake"] for item in paper_items)
+            for item in paper_items:
+                g = item["g"]
+                short_away = g["away_team"].split()[-1]
+                short_home = g["home_team"].split()[-1]
+                e_color = c["green"] if item["rec_edge"] >= 0.04 else c["amber"] if item["rec_edge"] >= 0.01 else c["muted"]
+                card_col, x_col = st.columns([5, 1], vertical_alignment="center")
+                with card_col:
+                    st.markdown(
+                        f'<div class="slip-game">'
+                        f'<div class="slip-game-label">{short_away} @ {short_home}</div>'
+                        f'<div class="slip-meta">Auto: {item["rec_team"].split()[-1]} {fmt_ml(item["rec_odds"])}</div>'
+                        f'<div class="slip-meta" style="color:{e_color};">'
+                        f'Stake: ${item["stake"]:.2f} · Edge: {item["rec_edge"]*100:+.1f}% · Win: +${item["payout"]:.2f}'
+                        f'</div></div>',
+                        unsafe_allow_html=True,
+                    )
+                with x_col:
+                    if st.button("✕", key=f"rm_paper_{item['bid']}", help="Remove from slip"):
+                        if item["bid"] in st.session_state["paper_slip"]:
+                            st.session_state["paper_slip"].remove(item["bid"])
+                        st.rerun()
+
+            st.markdown(
+                f'<div class="slip-summary">'
+                f'Total: <strong>${total_paper:.2f}</strong> / ${paper_balance:.2f}'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+
+            if st.button("📋 Log Paper Bets", type="primary", use_container_width=True, key="log_paper"):
+                conn = get_connection()
+                logged = 0
+                for item in paper_items:
+                    feats = item["features"]
+                    conn.execute("""
+                        INSERT INTO paper_bets (
+                            game_date, home_team, away_team, bet_on, odds, stake,
+                            model_prob, implied_prob, notes,
+                            win_pct_diff, pythag_diff, run_diff_diff, rs_diff, ra_diff, home_advantage,
+                            sp_era_diff, sp_whip_diff, sp_k9_diff, sp_bb9_diff
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """, (
+                        str(date.today()),
+                        item["g"]["home_team"], item["g"]["away_team"],
+                        item["rec_team"], int(item["rec_odds"]),
+                        item["stake"], item["model_p"], item["impl_p"],
+                        f"Edge: {item['rec_edge']*100:+.1f}%",
+                        feats.get("win_pct_diff"), feats.get("pythag_diff"),
+                        feats.get("run_diff_diff"), feats.get("rs_diff"),
+                        feats.get("ra_diff"),       feats.get("home_advantage"),
+                        feats.get("sp_era_diff"),   feats.get("sp_whip_diff"),
+                        feats.get("sp_k9_diff"),    feats.get("sp_bb9_diff"),
+                    ))
+                    logged += 1
+                conn.commit()
+                conn.close()
+                if logged:
+                    st.success(f"✅ {logged} paper bet(s) logged!")
+                    st.session_state["paper_slip"] = []
+                    st.rerun()

@@ -16,7 +16,7 @@ from theme import init_theme, palette
 init_db()
 
 st.set_page_config(page_title="Paper Bet Tracker", page_icon="📋", layout="wide")
-init_theme()
+init_theme("#9333ea")   # purple — paper bet tracker
 
 st.title("📋 Paper Bet Tracker")
 st.caption("Log paper bets for all games — outcomes feed model training without affecting your real Bet Tracker metrics.")
@@ -297,27 +297,27 @@ if not completed.empty:
 <div style="display:flex; gap:12px; margin-bottom:0.5rem; flex-wrap:wrap;">
   <div class="stat-box" style="flex:1; min-width:110px;">
     <div style="font-size:0.72rem; color:{_c['muted']}; font-weight:600; text-transform:uppercase; letter-spacing:0.07em; margin-bottom:6px;">Total Bets</div>
-    <div style="font-size:2rem; font-weight:800; font-family:'Syne',sans-serif; color:{_c['text']};">{n_bets}</div>
+    <div style="font-size:2rem; font-weight:800; font-family:'Manrope',sans-serif; color:{_c['text']};">{n_bets}</div>
   </div>
   <div class="stat-box" style="flex:1; min-width:110px;">
     <div style="font-size:0.72rem; color:{_c['muted']}; font-weight:600; text-transform:uppercase; letter-spacing:0.07em; margin-bottom:6px;">Win Rate</div>
-    <div style="font-size:2rem; font-weight:800; font-family:'Syne',sans-serif; color:{_c['text']};">{win_rate:.1f}%</div>
+    <div style="font-size:2rem; font-weight:800; font-family:'Manrope',sans-serif; color:{_c['text']};">{win_rate:.1f}%</div>
   </div>
   <div class="stat-box" style="flex:1; min-width:110px;">
     <div style="font-size:0.72rem; color:{_c['muted']}; font-weight:600; text-transform:uppercase; letter-spacing:0.07em; margin-bottom:6px;">ROI</div>
-    <div style="font-size:2rem; font-weight:800; font-family:'Syne',sans-serif; color:{roi_color};">{roi:+.1f}%</div>
+    <div style="font-size:2rem; font-weight:800; font-family:'Manrope',sans-serif; color:{roi_color};">{roi:+.1f}%</div>
   </div>
   <div class="stat-box" style="flex:1; min-width:110px;">
     <div style="font-size:0.72rem; color:{_c['muted']}; font-weight:600; text-transform:uppercase; letter-spacing:0.07em; margin-bottom:6px;">Total P&amp;L</div>
-    <div style="font-size:2rem; font-weight:800; font-family:'Syne',sans-serif; color:{pnl_color};">${total_pnl:+.2f}</div>
+    <div style="font-size:2rem; font-weight:800; font-family:'Manrope',sans-serif; color:{pnl_color};">${total_pnl:+.2f}</div>
   </div>
   <div class="stat-box" style="flex:1; min-width:110px;" title="Closing Line Value — positive means you got better odds than closing.">
     <div style="font-size:0.72rem; color:{_c['muted']}; font-weight:600; text-transform:uppercase; letter-spacing:0.07em; margin-bottom:6px;">Avg CLV ⓘ</div>
-    <div style="font-size:2rem; font-weight:800; font-family:'Syne',sans-serif; color:{clv_color};">{avg_clv:+.2f}%</div>
+    <div style="font-size:2rem; font-weight:800; font-family:'Manrope',sans-serif; color:{clv_color};">{avg_clv:+.2f}%</div>
   </div>
   <div class="stat-box" style="flex:1; min-width:130px;" title="Completed paper bets with feature data logged via Bet Sizing — these feed model training on next retrain.">
     <div style="font-size:0.72rem; color:{_c['muted']}; font-weight:600; text-transform:uppercase; letter-spacing:0.07em; margin-bottom:6px;">Training Ready ⓘ</div>
-    <div style="font-size:2rem; font-weight:800; font-family:'Syne',sans-serif; color:{_c['accent']};">{training_ready}</div>
+    <div style="font-size:2rem; font-weight:800; font-family:'Manrope',sans-serif; color:{_c['accent']};">{training_ready}</div>
   </div>
 </div>
 <div style="font-size:0.78rem; color:{_c['muted']}; margin-bottom:1.5rem;">
@@ -336,20 +336,20 @@ st.dataframe(display, use_container_width=True, hide_index=True)
 # --- Running P&L chart (only when enough data) ---
 if not completed.empty and len(completed) >= 3:
     _c   = palette()
-    _tmpl = "plotly_dark" if _c["bg"] == "#07080f" else "plotly"
+    _tmpl = _c["plotly_template"]
 
     st.divider()
     st.subheader("Running P&L")
     completed_sorted = completed.sort_values("game_date")
     completed_sorted["running_pnl"] = completed_sorted["profit_loss"].cumsum()
 
-    colors = ["#22d47a" if v >= 0 else "#f05252" for v in completed_sorted["running_pnl"]]
+    colors = [_c["plot_green"] if v >= 0 else _c["plot_red"] for v in completed_sorted["running_pnl"]]
     fig = go.Figure()
     fig.add_trace(go.Scatter(
         x=list(range(1, len(completed_sorted) + 1)),
         y=completed_sorted["running_pnl"],
         mode="lines+markers",
-        line=dict(color="#22d47a", width=2),
+        line=dict(color=_c["plot_green"], width=2),
         marker=dict(color=colors, size=8),
         name="Cumulative P&L ($)"
     ))
@@ -358,7 +358,7 @@ if not completed.empty and len(completed) >= 3:
         template=_tmpl,
         paper_bgcolor=_c["plot_paper"],
         plot_bgcolor=_c["plot_bg"],
-        font=dict(family="Syne", color=_c["plot_font"]),
+        font=dict(family="Manrope", color=_c["plot_font"]),
         xaxis_title="Bet #",
         yaxis_title="P&L ($)",
         height=350,

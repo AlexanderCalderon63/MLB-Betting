@@ -16,7 +16,7 @@ from theme import init_theme, palette
 init_db()
 
 st.set_page_config(page_title="Parlay Tracker", page_icon="🎰", layout="wide")
-init_theme()
+init_theme("#e11d48")   # rose — parlay tracker
 
 st.title("🎰 Parlay Tracker")
 st.caption("Track parlay outcomes — win rate, ROI, and P&L across all logged parlays.")
@@ -157,22 +157,22 @@ st.markdown(f"""
 <div style="display:flex; gap:12px; margin-bottom:1rem; flex-wrap:wrap;">
   <div class="stat-box" style="flex:1; min-width:120px;">
     <div style="font-size:0.72rem; color:{_c['muted']}; font-weight:600; text-transform:uppercase; letter-spacing:0.07em; margin-bottom:6px;">Resolved Parlays</div>
-    <div style="font-size:2rem; font-weight:800; font-family:'Syne',sans-serif; color:{_c['text']};">{n_resolved}</div>
+    <div style="font-size:2rem; font-weight:800; font-family:'Manrope',sans-serif; color:{_c['text']};">{n_resolved}</div>
     <div style="font-size:0.72rem; color:{_c['muted']};">{n_pending} pending</div>
   </div>
   <div class="stat-box" style="flex:1; min-width:120px;">
     <div style="font-size:0.72rem; color:{_c['muted']}; font-weight:600; text-transform:uppercase; letter-spacing:0.07em; margin-bottom:6px;">Win Rate</div>
-    <div style="font-size:2rem; font-weight:800; font-family:'Syne',sans-serif; color:{_c['text']};">{win_rate:.1f}%</div>
+    <div style="font-size:2rem; font-weight:800; font-family:'Manrope',sans-serif; color:{_c['text']};">{win_rate:.1f}%</div>
     <div style="font-size:0.72rem; color:{_c['muted']};">Win/Loss only — excludes cashouts</div>
   </div>
   <div class="stat-box" style="flex:1; min-width:120px;">
     <div style="font-size:0.72rem; color:{_c['muted']}; font-weight:600; text-transform:uppercase; letter-spacing:0.07em; margin-bottom:6px;">P&amp;L</div>
-    <div style="font-size:2rem; font-weight:800; font-family:'Syne',sans-serif; color:{pnl_color};">${total_pnl:+.2f}</div>
+    <div style="font-size:2rem; font-weight:800; font-family:'Manrope',sans-serif; color:{pnl_color};">${total_pnl:+.2f}</div>
     <div style="font-size:0.72rem; color:{roi_color};">ROI: {roi:+.1f}%</div>
   </div>
   <div class="stat-box" style="flex:1; min-width:120px;">
     <div style="font-size:0.72rem; color:{_c['muted']}; font-weight:600; text-transform:uppercase; letter-spacing:0.07em; margin-bottom:6px;">Total Wagered</div>
-    <div style="font-size:2rem; font-weight:800; font-family:'Syne',sans-serif; color:{_c['text']};">${total_stk:.2f}</div>
+    <div style="font-size:2rem; font-weight:800; font-family:'Manrope',sans-serif; color:{_c['text']};">${total_stk:.2f}</div>
   </div>
 </div>
 """, unsafe_allow_html=True)
@@ -309,15 +309,15 @@ if n_resolved >= 3:
     sorted_res = resolved.sort_values("created_date")
     sorted_res["running_pnl"] = sorted_res["profit_loss"].cumsum()
 
-    colors = ["#22d47a" if v >= 0 else "#f05252" for v in sorted_res["running_pnl"]]
-    _tmpl  = "plotly_dark" if _c["bg"] == "#07080f" else "plotly"
+    colors = [_c["plot_green"] if v >= 0 else _c["plot_red"] for v in sorted_res["running_pnl"]]
+    _tmpl  = _c["plotly_template"]
 
     fig = go.Figure()
     fig.add_trace(go.Scatter(
         x=list(range(1, len(sorted_res) + 1)),
         y=sorted_res["running_pnl"],
         mode="lines+markers",
-        line=dict(color="#22d47a", width=2),
+        line=dict(color=_c["plot_green"], width=2),
         marker=dict(color=colors, size=8),
         name="Cumulative P&L ($)",
     ))
@@ -326,7 +326,7 @@ if n_resolved >= 3:
         template=_tmpl,
         paper_bgcolor=_c["plot_paper"],
         plot_bgcolor=_c["plot_bg"],
-        font=dict(family="Syne", color=_c["plot_font"]),
+        font=dict(family="Manrope", color=_c["plot_font"]),
         xaxis_title="Parlay #",
         yaxis_title="P&L ($)",
         height=350,

@@ -126,7 +126,7 @@ def _run_seasonal_holdout() -> tuple:
 
 
 st.set_page_config(page_title="Model Performance", page_icon="📊", layout="wide")
-init_theme()
+init_theme("#2563eb")   # blue — model performance
 
 st.title("📊 Model Performance")
 st.caption("Calibration and signal tier analysis — how well does the model's confidence match reality?")
@@ -368,7 +368,7 @@ else:
     )
 
 _c = palette()
-_tmpl = "plotly_dark" if _c["bg"] == "#07080f" else "plotly"
+_tmpl = _c["plotly_template"]
 
 if enough_bets:
     # ── Calibration plot ───────────────────────────────────────────────────────
@@ -425,7 +425,7 @@ if enough_bets:
         template=_tmpl,
         paper_bgcolor=_c["plot_paper"],
         plot_bgcolor=_c["plot_bg"],
-        font=dict(family="Syne", color=_c["plot_font"]),
+        font=dict(family="Manrope", color=_c["plot_font"]),
         xaxis=dict(title="Model predicted probability", tickformat=".0%", range=[0.38, 0.77]),
         yaxis=dict(title="Actual win rate", tickformat=".0%", range=[0.38, 0.77]),
         height=420,
@@ -471,7 +471,7 @@ if enough_bets:
             template=_tmpl,
             paper_bgcolor=_c["plot_paper"],
             plot_bgcolor=_c["plot_bg"],
-            font=dict(family="Syne", color=_c["plot_font"]),
+            font=dict(family="Manrope", color=_c["plot_font"]),
             yaxis=dict(title="Win Rate (%)", range=[0, 100]),
             xaxis_title=None,
             height=380,
@@ -511,7 +511,7 @@ if enough_bets:
             template=_tmpl,
             paper_bgcolor=_c["plot_paper"],
             plot_bgcolor=_c["plot_bg"],
-            font=dict(family="Syne", color=_c["plot_font"]),
+            font=dict(family="Manrope", color=_c["plot_font"]),
             xaxis_title="Edge (model prob − market implied prob, %)",
             yaxis_title="Model probability (%)",
             height=400,
@@ -555,23 +555,23 @@ with st.expander("📈 Historical Backtesting (Out-of-Sample)", expanded=False):
 <div style="display:flex; gap:12px; margin:1rem 0 1.5rem 0; flex-wrap:wrap;">
   <div class="stat-box" style="flex:1; min-width:120px;">
     <div style="font-size:0.72rem; color:{_c['muted']}; font-weight:600; text-transform:uppercase; letter-spacing:0.07em; margin-bottom:6px;">Games Tested</div>
-    <div style="font-size:2rem; font-weight:800; font-family:'Syne',sans-serif; color:{_c['text']};">{n_games:,}</div>
+    <div style="font-size:2rem; font-weight:800; font-family:'Manrope',sans-serif; color:{_c['text']};">{n_games:,}</div>
   </div>
   <div class="stat-box" style="flex:1; min-width:120px;">
     <div style="font-size:0.72rem; color:{_c['muted']}; font-weight:600; text-transform:uppercase; letter-spacing:0.07em; margin-bottom:6px;">Seasons</div>
-    <div style="font-size:2rem; font-weight:800; font-family:'Syne',sans-serif; color:{_c['text']};">{len(seasons_tested)}</div>
+    <div style="font-size:2rem; font-weight:800; font-family:'Manrope',sans-serif; color:{_c['text']};">{len(seasons_tested)}</div>
   </div>
   <div class="stat-box" style="flex:1; min-width:120px;">
     <div style="font-size:0.72rem; color:{_c['muted']}; font-weight:600; text-transform:uppercase; letter-spacing:0.07em; margin-bottom:6px;">Model Accuracy</div>
-    <div style="font-size:2rem; font-weight:800; font-family:'Syne',sans-serif; color:{acc_color};">{model_acc*100:.1f}%</div>
+    <div style="font-size:2rem; font-weight:800; font-family:'Manrope',sans-serif; color:{acc_color};">{model_acc*100:.1f}%</div>
   </div>
   <div class="stat-box" style="flex:1; min-width:120px;">
     <div style="font-size:0.72rem; color:{_c['muted']}; font-weight:600; text-transform:uppercase; letter-spacing:0.07em; margin-bottom:6px;">Home Baseline</div>
-    <div style="font-size:2rem; font-weight:800; font-family:'Syne',sans-serif; color:{_c['text']};">{home_baseline*100:.1f}%</div>
+    <div style="font-size:2rem; font-weight:800; font-family:'Manrope',sans-serif; color:{_c['text']};">{home_baseline*100:.1f}%</div>
   </div>
   <div class="stat-box" style="flex:1; min-width:120px;" title="Brier score: lower is better. 0.25 = coin flip, 0.00 = perfect.">
     <div style="font-size:0.72rem; color:{_c['muted']}; font-weight:600; text-transform:uppercase; letter-spacing:0.07em; margin-bottom:6px;">Brier Score ⓘ</div>
-    <div style="font-size:2rem; font-weight:800; font-family:'Syne',sans-serif; color:{_c['text']};">{brier_bt:.4f}</div>
+    <div style="font-size:2rem; font-weight:800; font-family:'Manrope',sans-serif; color:{_c['text']};">{brier_bt:.4f}</div>
   </div>
 </div>
 """, unsafe_allow_html=True)
@@ -612,7 +612,7 @@ with st.expander("📈 Historical Backtesting (Out-of-Sample)", expanded=False):
             template=_tmpl,
             paper_bgcolor=_c["plot_paper"],
             plot_bgcolor=_c["plot_bg"],
-            font=dict(family="Syne", color=_c["plot_font"]),
+            font=dict(family="Manrope", color=_c["plot_font"]),
             xaxis=dict(title="Model predicted probability", tickformat=".0%", range=[0.38, 0.77]),
             yaxis=dict(title="Actual win rate", tickformat=".0%", range=[0.38, 0.77]),
             height=420,
