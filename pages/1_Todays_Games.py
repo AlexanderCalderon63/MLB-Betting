@@ -988,7 +988,7 @@ with st.sidebar:
             short_away = g["away_team"].split()[-1]
             short_home = g["home_team"].split()[-1]
 
-            lbl_col, x_col = st.columns([5, 1], vertical_alignment="center")
+            lbl_col, x_col = st.columns([5, 1])
             with lbl_col:
                 st.markdown(
                     f'<div class="slip-game-label">{short_away} @ {short_home}</div>',
@@ -1154,7 +1154,7 @@ with st.sidebar:
                 short_away = g["away_team"].split()[-1]
                 short_home = g["home_team"].split()[-1]
                 e_color = c["green"] if item["rec_edge"] >= 0.04 else c["amber"] if item["rec_edge"] >= 0.01 else c["muted"]
-                card_col, x_col = st.columns([5, 1], vertical_alignment="center")
+                card_col, x_col = st.columns([5, 1])
                 with card_col:
                     st.markdown(
                         f'<div class="slip-game">'
