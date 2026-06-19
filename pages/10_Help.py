@@ -212,15 +212,9 @@ render_feature_grid([
     },
     {
         "icon": "🎰",
-        "name": "Parlay Builder",
-        "desc": "Stack today's value bets into a parlay or build one manually. Shows combined odds and estimated payout.",
-        "page": "8_Parlay_Builder",
-    },
-    {
-        "icon": "📈",
-        "name": "Parlay Tracker",
-        "desc": "Log parlay bets and track outcomes with a P&L curve over time.",
-        "page": "9_Parlay_Tracker",
+        "name": "Parlays",
+        "desc": "One page, two tabs: Build model-scored parlays from today's value bets, then Track their win rate, ROI, and P&L as they settle.",
+        "page": "8_Parlays",
     },
 ])
 
@@ -289,6 +283,13 @@ render_callout(
     "Bet Slip",
     "The staging cart in the sidebar on Today's Games. Add bets here from game cards, set your stake, "
     "and click Log Bets to save them. The slip clears after logging.",
+)
+
+render_callout(
+    "Parlay",
+    "A single bet that stacks multiple games together — every leg has to win for the parlay to pay out. "
+    "The odds multiply, so the payout is bigger, but so is the risk. Build and track them on the Parlays page.",
+    "Example: 3 legs at −110 each → roughly +595 combined odds",
 )
 
 st.divider()
