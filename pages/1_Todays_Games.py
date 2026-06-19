@@ -38,7 +38,8 @@ with col_refresh:
         st.cache_data.clear()
         for key in [k for k in st.session_state if k.startswith(("llm_", "insight_"))]:
             del st.session_state[key]
-        for key in ["pitcher_data", "pitchers_loaded", "h2h_data", "weather_data", "_warm_sig"]:
+        for key in ["pitcher_data", "pitchers_loaded", "h2h_data", "weather_data", "_warm_sig",
+                    "ai_recs", "ai_recs_error"]:
             st.session_state.pop(key, None)
         st.rerun()
 with col_filter:
@@ -481,6 +482,97 @@ def _llm_justify(fav: str, dog: str, value_tier: str, pitcher_ctx: str, form_ctx
     return result
 
 
+def _ai_best_bets(slate: list[dict]) -> dict | None:
+    """Evaluate the whole slate with Claude and return value-bet recommendations.
+
+    `slate` is a list of per-game dicts (one preferred entry per game) carrying
+    odds, market/model probabilities, edges, signals, pitching, and recent form.
+    Returns {"recs": [{"bid","side","team","reason"}], "summary": str} on success,
+    or None if the AI is unavailable / the response can't be parsed. The AI is free
+    to pick which games AND which side, and to recommend none on a weak slate.
+    """
+    api_key = _read_anthropic_key()
+    if not api_key:
+        return None
+    try:
+        import anthropic
+    except ImportError:
+        return None
+
+    idx_map: dict[int, dict] = {}
+    lines = []
+    for i, gm in enumerate(slate, start=1):
+        idx_map[i] = gm
+        a, h = gm["away_team"], gm["home_team"]
+        lines.append(
+            f"Game {i}: {a} (away) @ {h} (home)\n"
+            f"  {a}: ML {fmt_ml(gm['away_ml'])}, market {gm['away_implied_prob']*100:.1f}%, "
+            f"model {gm['away_model_prob']*100:.1f}%, edge {gm['away_edge']*100:+.1f}%, signal {gm['away_rec']}\n"
+            f"  {h}: ML {fmt_ml(gm['home_ml'])}, market {gm['home_implied_prob']*100:.1f}%, "
+            f"model {gm['home_model_prob']*100:.1f}%, edge {gm['home_edge']*100:+.1f}%, signal {gm['home_rec']}\n"
+            f"  Pitching: {gm.get('pitching_ctx') or 'not announced'}\n"
+            f"  Recent form (last 10): {a} {gm.get('away_l10', '—')}, {h} {gm.get('home_l10', '—')}"
+        )
+
+    prompt = (
+        "You are a sharp, disciplined MLB betting analyst deciding which moneyline bets to place today.\n\n"
+        "For each game you get the model's win probability, the market's implied probability, the resulting "
+        "edge (model minus market), a value signal, the pitching matchup, and recent form.\n\n"
+        "Your job: pick the games that offer genuine betting value and are worth real money. Use the model "
+        "edge and signals as a starting point, but apply your own holistic judgment of the whole picture — "
+        "the pitching matchup, recent form, and how trustworthy each edge looks. Favor positive-edge sides, "
+        "be selective, and only recommend bets you would actually place. Recommending none is acceptable on a "
+        "weak slate.\n\n"
+        "For each recommendation, choose the side (home or away) and give a concise 1-2 sentence reason focused "
+        "on why it is good value.\n\n"
+        "Return ONLY valid JSON (no markdown fences, no prose) in exactly this shape:\n"
+        '{"summary": "<one short sentence overview of the slate>", "recommendations": '
+        '[{"game": <game number>, "side": "home" or "away", "reason": "<1-2 sentences>"}]}\n\n'
+        "Slate:\n" + "\n\n".join(lines)
+    )
+
+    try:
+        client = anthropic.Anthropic(api_key=api_key)
+        msg = client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=1500,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        text = msg.content[0].text.strip()
+    except Exception as e:
+        print(f"[AI BEST BETS] LLM error: {e}")
+        return None
+
+    import json
+    try:
+        start = text.index("{")
+        end   = text.rindex("}")
+        data  = json.loads(text[start:end + 1])
+    except Exception as e:
+        print(f"[AI BEST BETS] parse error: {e} — raw: {text[:200]}")
+        return None
+
+    recs = []
+    for r in data.get("recommendations", []):
+        try:
+            gnum = int(r.get("game"))
+        except (TypeError, ValueError):
+            continue
+        side = str(r.get("side", "")).lower()
+        gm   = idx_map.get(gnum)
+        if not gm or side not in ("home", "away"):
+            continue
+        team = gm["home_team"] if side == "home" else gm["away_team"]
+        recs.append({
+            "bid":    gm["base_game_id"],
+            "side":   side,
+            "team":   team,
+            "reason": str(r.get("reason", "")).strip(),
+        })
+
+    return {"recs": recs, "summary": str(data.get("summary", "")).strip()}
+
+
 def justify_prediction(g: dict, home_l10: str, away_l10: str, stats_df=None) -> str:
     import hashlib
     gid  = g.get("base_game_id", g.get("game_id", "x"))
@@ -862,6 +954,121 @@ with sa2:
     ):
         _toggle_select_all("paper_slip")
         st.rerun()
+
+# ── AI Best Bets — whole-slate value evaluation ───────────────────────────────
+# A single button asks Claude to evaluate every visible game, then auto-adds its
+# value picks to the REAL bet slip (pre-selecting the AI's chosen side) without
+# logging anything. Budget never gates the selection.
+def _sp_brief(sp: dict | None) -> str | None:
+    if not sp or not sp.get("found"):
+        return None
+    try:
+        return f"{sp.get('name', '')} (ERA {sp['era']}, WHIP {sp['whip']})"
+    except Exception:
+        return None
+
+def _apply_ai_recs(recs: list[dict]) -> None:
+    """Add AI-recommended games to the real slip and pre-set each chosen side."""
+    for r in recs:
+        bid = r["bid"]
+        if bid not in st.session_state["real_slip"]:
+            st.session_state["real_slip"].append(bid)
+        # Pre-select the AI's side so the slip radio (key=side_<bid>) defaults to it.
+        st.session_state[f"side_{bid}"] = r["team"]
+
+ai_btn_col, ai_cap_col = st.columns([1.8, 4])
+with ai_btn_col:
+    if st.button(
+        "🤖 AI Best Bets",
+        key="ai_best_bets",
+        use_container_width=True,
+        disabled=not visible_ids,
+        help="Let Claude evaluate the whole slate for value and auto-add its picks to your Real bet slip",
+    ):
+        slate = []
+        for bid in visible_ids:
+            g = game_best[bid]
+            hsp = _sp_brief(g.get("home_sp"))
+            asp = _sp_brief(g.get("away_sp"))
+            pitching_ctx = (
+                f"{g['home_team']} {hsp} vs {g['away_team']} {asp}" if (hsp and asp) else None
+            )
+            slate.append({
+                **g,
+                "pitching_ctx": pitching_ctx,
+                "home_l10":     fmt_last_ten(g["home_team"]),
+                "away_l10":     fmt_last_ten(g["away_team"]),
+            })
+        with st.spinner("Claude is evaluating today's slate for value..."):
+            res = _ai_best_bets(slate)
+        if res is None:
+            st.session_state["ai_recs_error"] = (
+                "Couldn't get AI recommendations — check ANTHROPIC_API_KEY and try again."
+            )
+            st.session_state.pop("ai_recs", None)
+        else:
+            st.session_state["ai_recs"] = res
+            st.session_state.pop("ai_recs_error", None)
+            _apply_ai_recs(res["recs"])
+        st.rerun()
+with ai_cap_col:
+    st.caption("Evaluates every game for value and auto-selects the best plays into your Real bet slip — no logging.")
+
+if st.session_state.get("ai_recs_error"):
+    st.warning(st.session_state["ai_recs_error"])
+
+_ai = st.session_state.get("ai_recs")
+if _ai is not None:
+    _ai_recs = _ai["recs"]
+    if not _ai_recs:
+        st.info(
+            "🤖 The AI didn't find any games worth a real-money bet on today's slate"
+            + (f" — {_ai['summary']}" if _ai.get("summary") else ".")
+        )
+    else:
+        hdr_col, clr_col = st.columns([5, 1.2])
+        with hdr_col:
+            _summ = f' &nbsp;·&nbsp; <span style="font-weight:500;color:{c["muted"]};">{html.escape(_ai["summary"])}</span>' if _ai.get("summary") else ""
+            st.markdown(
+                f'<div style="font-size:1.05rem;font-weight:700;color:{c["text"]};margin:6px 0 2px 0;">'
+                f'🤖 AI Recommended Bets ({len(_ai_recs)}){_summ}</div>'
+                f'<div style="font-size:0.8rem;color:{c["muted"]};margin-bottom:6px;">'
+                f'Added to your Real bet slip — review stakes in the sidebar before logging.</div>',
+                unsafe_allow_html=True,
+            )
+        with clr_col:
+            if st.button("✕ Clear AI picks", key="clear_ai_recs", use_container_width=True,
+                         help="Remove the AI's picks from the slip and clear this panel"):
+                for r in _ai_recs:
+                    bid = r["bid"]
+                    if bid in st.session_state["real_slip"]:
+                        st.session_state["real_slip"].remove(bid)
+                    for k in (f"stake_{bid}", f"side_{bid}", f"book_{bid}"):
+                        st.session_state.pop(k, None)
+                st.session_state.pop("ai_recs", None)
+                st.rerun()
+
+        for r in _ai_recs:
+            g = game_best.get(r["bid"])
+            if not g:
+                continue
+            is_home = (r["side"] == "home")
+            sel_odds = g["home_ml"]   if is_home else g["away_ml"]
+            sel_edge = g["home_edge"] if is_home else g["away_edge"]
+            e_color  = c["green"] if sel_edge >= 0.04 else c["amber"] if sel_edge >= 0.01 else c["muted"]
+            matchup  = f'{g["away_team"].split()[-1]} @ {g["home_team"].split()[-1]}'
+            st.markdown(
+                f'<div style="border-left:3px solid {c["accent"]};padding:9px 16px;margin:8px 0;">'
+                f'<div style="font-weight:700;color:{c["text"]};">'
+                f'✅ {html.escape(r["team"])} {html.escape(fmt_ml(sel_odds))} '
+                f'<span style="font-weight:500;color:{c["muted"]};font-size:0.85rem;">· {html.escape(matchup)} · '
+                f'<span style="color:{e_color};">Edge {sel_edge*100:+.1f}%</span></span></div>'
+                f'<div style="font-size:0.94rem;line-height:1.55;color:{c["text2"]};margin-top:4px;font-style:italic;">'
+                f'{html.escape(r["reason"])}</div></div>',
+                unsafe_allow_html=True,
+            )
+
+st.divider()
 
 # ── Game cards ─────────────────────────────────────────────────────────────────
 def _l10_color(record: str) -> str:
