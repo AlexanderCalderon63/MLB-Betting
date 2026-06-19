@@ -26,7 +26,7 @@ All page code calls `get_connection()` which returns a `_PgConn` wrapper. This w
 `conn.execute()` uses `RealDictCursor` (dict rows) and auto-appends `RETURNING id` to INSERTs.  
 `conn.cursor()` returns a plain cursor for `pd.read_sql()` — use this path for DataFrame queries.
 
-`init_db()` is called at the top of every page. It is idempotent — `CREATE TABLE IF NOT EXISTS` + `ALTER TABLE ADD COLUMN IF NOT EXISTS` via migration helpers.
+`init_db()` is called at the top of every page. It is idempotent — `CREATE TABLE IF NOT EXISTS` + `ALTER TABLE ADD COLUMN IF NOT EXISTS` via migration helpers. The `bankroll` table (one row — the user's starting balance) is created here too; see `bankroll.py`.
 
 ## Ingestion layer (`ingestion/`)
 
@@ -51,9 +51,19 @@ All page code calls `get_connection()` which returns a `_PgConn` wrapper. This w
 
 `evaluate_value(model_prob, implied_prob, odds)` returns edge, ¼-Kelly fraction, and signal tier (🔥 ≥8%, ✅ ≥4%, ⚠️ ≥1%, ➖ no edge, ❌ ≤−4%).
 
+## Bankroll & daily budget (`bankroll.py`)
+
+Self-contained money-management feature. The `bankroll` table holds one row — the user's starting balance, written once via a startup prompt. **Current balance is derived, never stored:** `initial + realized P&L from resolved real bets` (paper bets excluded). `get_balance_state()` returns `{initial, current, delta}` in a single query.
+
+`require_balance()` gates the app: called right after `init_theme()` on `app.py` and `3_Bet_Tracker.py`, it renders a one-time themed setup prompt and `st.stop()`s until a balance is entered. It caches `st.session_state["_bankroll_ok"]` after the first read, so a returning user pays no DB cost on later navigations (perf requirement). `streamlit`/`theme` are imported lazily inside the UI functions so `recommend_daily_budget()` stays importable for the self-check.
+
+`recommend_daily_budget(kelly_fractions, balance, risk)` sizes a daily budget from today's value bets: sum each value bet's ¼-Kelly fraction (from `evaluate_value`), scale by the risk level, cap total exposure as a share of bankroll. `RISK_LEVELS` = Conservative (⅛-Kelly / 5% cap) · Moderate (¼-Kelly / 10%) · Aggressive (⅜-Kelly / 20%). On `1_Todays_Games.py` this auto-fills the Real bet slip **Budget** (`st.session_state["budget_real"]`), re-assigned whenever the slate, bankroll, or risk changes; the existing edge-weighted stake pre-fill then splits it across picks. The risk selector lives on the Real bet slip. Real bets only — paper betting is untouched.
+
+`render_balance_card()` is the bankroll hero on Bet Tracker (current balance, green `+`/red `−` vs. initial, like the ROI metric). Run `python bankroll.py` for the money-math self-check.
+
 ## Theme system (`theme.py`)
 
-Every page calls `init_theme()` (renders sidebar dark-mode toggle + injects CSS) and uses `palette()` to get the active color dict for Plotly charts and inline HTML. Dark mode state lives in `st.session_state["_dark_mode"]`. CSS classes like `.stat-box`, `.game-block`, `.book-badge`, `.ctx-badge` are defined in `theme.py` and used via `unsafe_allow_html=True` throughout the pages.
+Every page calls `init_theme()` (renders sidebar dark-mode toggle + injects CSS) and uses `palette()` to get the active color dict for Plotly charts and inline HTML. Dark mode state lives in `st.session_state["_dark_mode"]`. CSS classes like `.stat-box`, `.game-block`, `.book-badge`, `.ctx-badge`, `.balance-hero` are defined in `theme.py` and used via `unsafe_allow_html=True` throughout the pages.
 
 ## Key cross-cutting patterns
 

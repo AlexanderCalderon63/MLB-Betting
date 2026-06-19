@@ -20,6 +20,7 @@ from ingestion.pitcher_scraper import search_pitcher, get_team_pitchers, get_pro
 from models.predictor import MLBPredictor, build_matchup_features, evaluate_value
 from database import init_db, get_connection
 from theme import init_theme, palette
+from bankroll import require_balance, get_balance_state, recommend_daily_budget, RISK_LEVELS, DEFAULT_RISK
 from ingestion.park_weather import park_factor_badge, weather_badges, get_weather
 
 init_db()
@@ -27,6 +28,7 @@ init_db()
 st.set_page_config(page_title="Today's Games", page_icon="⚾", layout="wide")
 init_theme("#0e7490")   # cyan — today's games
 c = palette()   # active theme colors — reused by inline HTML + helper functions
+require_balance()   # bankroll gates the budget recommendation below; no-op once set
 
 st.title("⚾ Today's MLB Games")
 st.caption("Live moneylines · Probable starters · Integrated bet slip")
@@ -349,6 +351,30 @@ for base_id, entries in sorted_games:
     caesars = next((e for e in entries if e["bookmaker_key"] == "caesars"), entries[0])
     game_best[base_id] = caesars
 
+# ── Recommended daily budget (real bets only) ──────────────────────────────────
+# Size a daily budget from the live bankroll + today's value bets via the Kelly
+# engine, scaled by the chosen risk level, then auto-assign it as the Real slip
+# budget. Computed here (before the stake pre-fill below) so stakes distribute
+# across the recommended total. Paper betting is untouched.
+_bal_state = get_balance_state()
+_risk = st.session_state.get("risk_level", DEFAULT_RISK)
+
+_value_kelly = []
+for _g in game_best.values():
+    if _g["home_has_value"] and (not _g["away_has_value"] or _g["home_edge"] >= _g["away_edge"]):
+        _value_kelly.append(_g["home_kelly"])
+    elif _g["away_has_value"]:
+        _value_kelly.append(_g["away_kelly"])
+
+rec_budget = recommend_daily_budget(_value_kelly, _bal_state["current"], _risk) if _bal_state else 0.0
+
+# Re-assign whenever the slate, bankroll, or risk changes — set but still
+# overridable, mirroring the stake-prefill pattern below.
+_budget_ctx = (tuple(sorted(game_best)), round(_bal_state["current"], 2) if _bal_state else None, _risk)
+if rec_budget > 0 and st.session_state.get("_budget_ctx") != _budget_ctx:
+    st.session_state["budget_real"] = min(max(rec_budget, 1.0), 100_000.0)
+st.session_state["_budget_ctx"] = _budget_ctx
+
 # ── Summary metrics ────────────────────────────────────────────────────────────
 total_games   = len(sorted_games)
 value_games   = sum(1 for _, e in sorted_games if any(x["home_has_value"] or x["away_has_value"] for x in e))
@@ -371,6 +397,68 @@ def calc_payout(stake, odds):
     if odds > 0:
         return round(stake * odds / 100, 2)
     return round(stake * 100 / abs(odds), 2)
+
+
+def render_slip_summary(items, total_stake, budget, ev, budget_label="budget"):
+    """Slip recap card: every staked bet listed, then a payout overview.
+
+    items: list of dicts with keys team, odds, stake, win (win = net profit).
+    Shared by the Real and Paper slips so both end in the same summary.
+    """
+    total_win  = sum(it["win"] for it in items)
+    max_payout = total_stake + total_win
+    over       = total_stake > budget + 0.01
+    t_color    = c["red"] if over else c["text"]
+    ev_color   = c["green"] if ev >= 0 else c["red"]
+    ev_str     = f'{"+" if ev >= 0 else ""}${ev:.2f}'
+    n          = len(items)
+
+    rows = "".join(
+        f'<div style="display:flex; align-items:baseline; gap:0.4rem; padding:0.28rem 0;'
+        f' border-top:1px solid {c["border"]};">'
+        f'<span style="flex:1; min-width:0; font-weight:700; color:{c["text"]}; font-size:0.8rem;'
+        f' white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">{it["team"].split()[-1]}</span>'
+        f'<span style="font-family:\'Space Mono\',monospace; font-size:0.72rem; color:{c["muted"]};">{fmt_ml(it["odds"])}</span>'
+        f'<span style="font-family:\'Space Mono\',monospace; font-size:0.72rem; color:{c["text2"]}; min-width:46px; text-align:right;">${it["stake"]:.2f}</span>'
+        f'<span style="font-family:\'Space Mono\',monospace; font-size:0.72rem; color:{c["green"]}; min-width:52px; text-align:right;">+${it["win"]:.2f}</span>'
+        f'</div>'
+        for it in items
+    )
+
+    def figure(label, value, color, sub=""):
+        sub_html = f'<div style="font-size:0.6rem; color:{c["muted"]};">{sub}</div>' if sub else ""
+        return (
+            f'<div style="flex:1;">'
+            f'<div style="font-size:0.6rem; text-transform:uppercase; letter-spacing:0.05em; color:{c["muted"]};">{label}</div>'
+            f'<div style="font-weight:800; font-size:0.92rem; color:{color};">{value}</div>'
+            f'{sub_html}</div>'
+        )
+
+    st.markdown(
+        f'<div class="slip-summary">'
+        f'<div style="display:flex; justify-content:space-between; align-items:baseline; margin-bottom:0.1rem;">'
+        f'<span style="font-weight:800; font-size:0.9rem; color:{c["text"]};">Slip summary</span>'
+        f'<span style="font-size:0.68rem; color:{c["muted"]}; text-transform:uppercase; letter-spacing:0.06em;">{n} bet{"" if n == 1 else "s"}</span>'
+        f'</div>'
+        f'<div style="display:flex; gap:0.4rem; padding-bottom:0.1rem; font-size:0.6rem;'
+        f' text-transform:uppercase; letter-spacing:0.05em; color:{c["muted"]};">'
+        f'<span style="flex:1;">Pick</span><span>Odds</span>'
+        f'<span style="min-width:46px; text-align:right;">Stake</span>'
+        f'<span style="min-width:52px; text-align:right;">To win</span></div>'
+        f'{rows}'
+        f'<div style="display:flex; gap:0.5rem; margin-top:0.55rem; padding-top:0.55rem; border-top:1px solid {c["border2"]};">'
+        f'{figure("Stake", f"${total_stake:.2f}", t_color, f"of ${budget:.0f} {budget_label}")}'
+        f'{figure("Payout", f"${max_payout:.2f}", c["green"], "if all win")}'
+        f'{figure("EV", ev_str, ev_color)}'
+        f'</div></div>',
+        unsafe_allow_html=True,
+    )
+    if over:
+        st.markdown(
+            f'<div style="font-size:0.72rem; color:{c["red"]}; margin:-0.15rem 0 0.45rem 0;">'
+            f'⚠️ ${total_stake - budget:.2f} over your ${budget:.0f} {budget_label}</div>',
+            unsafe_allow_html=True,
+        )
 
 def rec_badge(rec, edge):
     if edge >= 0.08:   return f'<span class="rec-badge rec-hot">{rec}</span>'
@@ -1278,95 +1366,130 @@ with st.sidebar:
             _clear_real_slip()
             st.rerun()
 
+        # Risk level drives the recommended budget (read at the top of the run).
+        st.session_state.setdefault("risk_level", DEFAULT_RISK)
+        st.radio(
+            "Risk level",
+            list(RISK_LEVELS.keys()),
+            key="risk_level",
+            horizontal=True,
+            help="Sizes the recommended budget. Conservative ≈ ⅛-Kelly capped at 5% of bankroll · "
+                 "Moderate ≈ ¼-Kelly at 10% · Aggressive ≈ ⅜-Kelly at 20%.",
+        )
+
+        # No hardcoded value: the recommendation (set above) seeds budget_real;
+        # setdefault covers the first render when no bankroll/value bets exist.
+        st.session_state.setdefault(
+            "budget_real", min(max(rec_budget, 1.0), 100_000.0) if rec_budget > 0 else 50.0
+        )
         budget = st.number_input(
             "Budget ($)",
-            min_value=1.0, max_value=100_000.0, value=50.0, step=5.0,
+            min_value=1.0, max_value=100_000.0, step=5.0,
             key="budget_real",
         )
+        if _bal_state and rec_budget > 0:
+            # 1.1: the balance figure lives only on Bet Tracker — name the source,
+            # not the amount.
+            st.markdown(
+                f'<div class="slip-meta" style="margin:-0.1rem 0 0.5rem;">'
+                f'↳ Auto-sized from your bankroll · <strong>{_risk}</strong> risk</div>',
+                unsafe_allow_html=True,
+            )
+        elif _bal_state:
+            st.markdown(
+                f'<div class="slip-meta" style="margin:-0.1rem 0 0.5rem;">'
+                f'No value bets on today\'s board — set your own budget.</div>',
+                unsafe_allow_html=True,
+            )
 
         real_configs = {}
         for bid in real_slip:
             if bid not in game_best:
                 continue
-            g     = game_best[bid]
-            books = books_by_game.get(bid, [g])
-            book_names = [b["bookmaker"] for b in books]
+            # Each bet lives in its own bordered card so odds/edge never float free
+            # of the game they belong to.
+            with st.container(border=True):
+                g     = game_best[bid]
+                books = books_by_game.get(bid, [g])
+                book_names = [b["bookmaker"] for b in books]
 
-            short_away = g["away_team"].split()[-1]
-            short_home = g["home_team"].split()[-1]
+                short_away = g["away_team"].split()[-1]
+                short_home = g["home_team"].split()[-1]
 
-            lbl_col, x_col = st.columns([5, 1])
-            with lbl_col:
+                lbl_col, x_col = st.columns([5, 1])
+                with lbl_col:
+                    st.markdown(
+                        f'<div class="slip-game-label">{short_away} @ {short_home}</div>',
+                        unsafe_allow_html=True,
+                    )
+                with x_col:
+                    if st.button("✕", key=f"rm_real_{bid}", help="Remove from slip"):
+                        if bid in st.session_state["real_slip"]:
+                            st.session_state["real_slip"].remove(bid)
+                        for k in (f"stake_{bid}", f"side_{bid}", f"book_{bid}"):
+                            st.session_state.pop(k, None)
+                        st.rerun()
+
+                rec_idx = 0 if g["home_edge"] >= g["away_edge"] else 1
+                side_opts = [g["home_team"], g["away_team"]]
+                side = st.radio(
+                    f"Side",
+                    side_opts,
+                    index=rec_idx,
+                    key=f"side_{bid}",
+                    horizontal=True,
+                    label_visibility="collapsed",
+                    format_func=lambda x: x.split()[-1],
+                )
+
+                default_book_idx = next(
+                    (i for i, b in enumerate(books) if b["bookmaker_key"] == "caesars"), 0
+                )
+                book_name = st.selectbox(
+                    "Book",
+                    book_names,
+                    index=default_book_idx,
+                    key=f"book_{bid}",
+                    label_visibility="collapsed",
+                )
+                sel_book = next((b for b in books if b["bookmaker"] == book_name), books[0])
+
+                is_home    = (side == g["home_team"])
+                ch_odds    = sel_book["home_ml"]    if is_home else sel_book["away_ml"]
+                ch_edge    = g["home_edge"]         if is_home else g["away_edge"]
+                ch_prob    = g["home_model_prob"]   if is_home else g["away_model_prob"]
+                ch_impl    = g["home_implied_prob"] if is_home else g["away_implied_prob"]
+
+                stake = st.number_input(
+                    "Stake ($)",
+                    min_value=0.0, step=1.0, format="%.2f",
+                    key=f"stake_{bid}",
+                )
+
+                payout = calc_payout(stake, ch_odds) if stake > 0 else 0.0
+                e_color = c["green"] if ch_edge >= 0.04 else c["amber"] if ch_edge >= 0.01 else c["muted"]
+                win_txt = f' &nbsp;·&nbsp; Win +${payout:.2f}' if stake > 0 else ""
+                # Name the pick on the odds line — without it, the odds don't say which side.
                 st.markdown(
-                    f'<div class="slip-game-label">{short_away} @ {short_home}</div>',
+                    f'<div class="slip-meta" style="color:{e_color};">'
+                    f'<strong>{side.split()[-1]}</strong> {fmt_ml(ch_odds)}'
+                    f' &nbsp;·&nbsp; Edge {ch_edge*100:+.1f}%{win_txt}</div>',
                     unsafe_allow_html=True,
                 )
-            with x_col:
-                if st.button("✕", key=f"rm_real_{bid}", help="Remove from slip"):
-                    if bid in st.session_state["real_slip"]:
-                        st.session_state["real_slip"].remove(bid)
-                    for k in (f"stake_{bid}", f"side_{bid}", f"book_{bid}"):
-                        st.session_state.pop(k, None)
-                    st.rerun()
 
-            rec_idx = 0 if g["home_edge"] >= g["away_edge"] else 1
-            side_opts = [g["home_team"], g["away_team"]]
-            side = st.radio(
-                f"Side",
-                side_opts,
-                index=rec_idx,
-                key=f"side_{bid}",
-                horizontal=True,
-                label_visibility="collapsed",
-                format_func=lambda x: x.split()[-1],
-            )
+                real_configs[bid] = {
+                    "game":       g,
+                    "team":       side,
+                    "odds":       ch_odds,
+                    "edge":       ch_edge,
+                    "model_prob": ch_prob,
+                    "impl_prob":  ch_impl,
+                    "stake":      stake,
+                    "bookmaker":  book_name,
+                    "features":   game_best[bid].get("features", {}),
+                }
 
-            default_book_idx = next(
-                (i for i, b in enumerate(books) if b["bookmaker_key"] == "caesars"), 0
-            )
-            book_name = st.selectbox(
-                "Book",
-                book_names,
-                index=default_book_idx,
-                key=f"book_{bid}",
-                label_visibility="collapsed",
-            )
-            sel_book = next((b for b in books if b["bookmaker"] == book_name), books[0])
-
-            is_home    = (side == g["home_team"])
-            ch_odds    = sel_book["home_ml"]    if is_home else sel_book["away_ml"]
-            ch_edge    = g["home_edge"]         if is_home else g["away_edge"]
-            ch_prob    = g["home_model_prob"]   if is_home else g["away_model_prob"]
-            ch_impl    = g["home_implied_prob"] if is_home else g["away_implied_prob"]
-
-            stake = st.number_input(
-                "Stake ($)",
-                min_value=0.0, step=1.0, format="%.2f",
-                key=f"stake_{bid}",
-            )
-
-            payout = calc_payout(stake, ch_odds) if stake > 0 else 0.0
-            e_color = c["green"] if ch_edge >= 0.04 else c["amber"] if ch_edge >= 0.01 else c["muted"]
-            win_txt = f" · Win: +${payout:.2f}" if stake > 0 else ""
-            st.markdown(
-                f'<div class="slip-meta" style="color:{e_color};">'
-                f'{fmt_ml(ch_odds)} &nbsp;·&nbsp; Edge: {ch_edge*100:+.1f}%{win_txt}</div>',
-                unsafe_allow_html=True,
-            )
-
-            real_configs[bid] = {
-                "game":       g,
-                "team":       side,
-                "odds":       ch_odds,
-                "edge":       ch_edge,
-                "model_prob": ch_prob,
-                "impl_prob":  ch_impl,
-                "stake":      stake,
-                "bookmaker":  book_name,
-                "features":   game_best[bid].get("features", {}),
-            }
-
-        # Real summary
+        # Real summary — every staked bet listed + payout overview
         total_real  = sum(rc["stake"] for rc in real_configs.values())
         active_real = {b: rc for b, rc in real_configs.items() if rc["stake"] > 0}
         if total_real > 0:
@@ -1374,15 +1497,12 @@ with st.sidebar:
                 rc["stake"] * (rc["model_prob"] * calc_payout(1, rc["odds"]) - (1 - rc["model_prob"]))
                 for rc in active_real.values()
             )
-            over    = total_real > budget + 0.01
-            t_color = c["red"] if over else c["text"]
-            st.markdown(
-                f'<div class="slip-summary">'
-                f'<span style="color:{t_color};">Total: <strong>${total_real:.2f}</strong> / ${budget:.2f}</span>'
-                f'<br><span style="color:{c["muted"]};font-size:0.75rem;">EV: {"+" if ev >= 0 else ""}${ev:.2f}</span>'
-                f'</div>',
-                unsafe_allow_html=True,
-            )
+            items = [
+                {"team": rc["team"], "odds": rc["odds"], "stake": rc["stake"],
+                 "win": calc_payout(rc["stake"], rc["odds"])}
+                for rc in active_real.values()
+            ]
+            render_slip_summary(items, total_real, budget, ev, "budget")
 
         if st.button("💰 Log Real Bets", type="primary", use_container_width=True, key="log_real"):
             conn = get_connection()
@@ -1483,11 +1603,14 @@ with st.sidebar:
                             st.session_state["paper_slip"].remove(item["bid"])
                         st.rerun()
 
-            st.markdown(
-                f'<div class="slip-summary">'
-                f'Total: <strong>${total_paper:.2f}</strong> / ${paper_balance:.2f}'
-                f'</div>',
-                unsafe_allow_html=True,
+            ev_paper = sum(
+                item["stake"] * (item["model_p"] * calc_payout(1, item["rec_odds"]) - (1 - item["model_p"]))
+                for item in paper_items
+            )
+            render_slip_summary(
+                [{"team": item["rec_team"], "odds": item["rec_odds"],
+                  "stake": item["stake"], "win": item["payout"]} for item in paper_items],
+                total_paper, paper_balance, ev_paper, "balance",
             )
 
             if st.button("📋 Log Paper Bets", type="primary", use_container_width=True, key="log_paper"):
