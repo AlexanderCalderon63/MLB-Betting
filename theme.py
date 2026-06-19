@@ -445,6 +445,38 @@ def _custom_css(c: dict) -> str:
 .hc-stat span {{ font-size: 0.66rem; color: {c['muted']}; text-transform: uppercase; letter-spacing: 0.06em; }}
 .hc-stat b {{ font-family: 'Manrope', sans-serif; font-weight: 800; font-size: 1.2rem; color: {c['text']}; }}
 
+/* ── Bankroll hero (Bet Tracker) — current balance as the page thesis ── */
+.balance-hero {{
+    display: flex; align-items: stretch; gap: 1.5rem; flex-wrap: wrap;
+    background: linear-gradient(135deg, {c['surface']} 0%, {c['surface2']} 100%);
+    border: 1px solid {c['border']}; border-radius: 20px;
+    padding: 1.6rem 1.9rem; margin-bottom: 1.6rem;
+    box-shadow: {c['shadow_lg']};
+}}
+.balance-main {{ flex: 1 1 240px; min-width: 0; }}
+.bh-label {{
+    font-family: 'Space Mono', monospace; font-size: 0.64rem; font-weight: 700;
+    letter-spacing: 0.12em; text-transform: uppercase; color: {c['muted']}; margin-bottom: 0.45rem;
+}}
+.bh-value {{
+    font-family: 'Manrope', sans-serif; font-weight: 800; font-size: 2.7rem; line-height: 1;
+    letter-spacing: -0.03em; font-variant-numeric: tabular-nums; margin-bottom: 0.4rem;
+}}
+.bh-note {{ font-size: 0.95rem; font-weight: 700; font-variant-numeric: tabular-nums; }}
+.balance-aside {{
+    flex: 0 1 240px; align-self: center;
+    padding-left: 1.5rem; border-left: 1px solid {c['border2']};
+}}
+.bh-aside-label {{
+    font-family: 'Space Mono', monospace; font-size: 0.62rem; letter-spacing: 0.1em;
+    text-transform: uppercase; color: {c['muted']}; margin-bottom: 0.2rem;
+}}
+.bh-aside-value {{
+    font-family: 'Manrope', sans-serif; font-weight: 800; font-size: 1.5rem;
+    color: {c['text']}; font-variant-numeric: tabular-nums; margin-bottom: 0.35rem;
+}}
+.bh-aside-sub {{ font-size: 0.72rem; color: {c['muted']}; line-height: 1.45; }}
+
 /* ── Info grid (app.py) ── */
 .info-grid {{ display: grid; grid-template-columns: repeat(3, 1fr); gap: 1rem; margin: 1.5rem 0; }}
 .info-row {{
@@ -732,6 +764,11 @@ def _responsive_css(c: dict) -> str:
     .hero-sub {{ font-size: 0.95rem; }}
     .hero-card {{ flex: 1 1 100%; width: 100%; padding: 1.2rem 1.3rem; }}
     .hc-pnl {{ font-size: 2.1rem; }}
+
+    /* Bankroll hero → single column; aside drops below with a top divider */
+    .balance-hero {{ flex-direction: column; gap: 1rem; padding: 1.3rem 1.3rem; border-radius: 16px; }}
+    .bh-value {{ font-size: 2.2rem; }}
+    .balance-aside {{ flex: 1 1 100%; padding-left: 0; padding-top: 1rem; border-left: none; border-top: 1px solid {c['border2']}; }}
 
     /* Dense grids collapse */
     .info-grid {{ grid-template-columns: 1fr; gap: 0.7rem; }}

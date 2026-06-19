@@ -279,6 +279,16 @@ def init_db(force: bool = False):
         )
     """)
 
+    # One row, written once: the user's starting bankroll. Current balance is
+    # derived (initial + realized real-bet P&L) — see bankroll.py.
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS bankroll (
+            id SERIAL PRIMARY KEY,
+            initial_balance REAL NOT NULL,
+            created_at TEXT DEFAULT NOW()::TEXT
+        )
+    """)
+
     _migrate_pitcher_columns(conn)
     _migrate_last_ten_columns(conn)
 

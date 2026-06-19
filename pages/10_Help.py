@@ -189,7 +189,7 @@ render_feature_grid([
     {
         "icon": "📒",
         "name": "Bet Tracker",
-        "desc": "Log real bets, resolve outcomes after games, and view your P&L chart, ROI, and Closing Line Value.",
+        "desc": "See your current bankroll vs. where you started, log real bets, resolve outcomes, and view your P&L chart, ROI, and Closing Line Value.",
         "page": "3_Bet_Tracker",
     },
     {
@@ -256,6 +256,23 @@ render_callout(
     "The app shows a ¼-Kelly recommendation — a conservative version that reduces variance. "
     "Never bet more than the full Kelly figure.",
     "Example: edge 6%, odds −120 → full Kelly ≈ 9% of bankroll, ¼-Kelly ≈ 2.3%",
+)
+
+render_callout(
+    "Bankroll &amp; Recommended Budget",
+    "Your bankroll is the total you've set aside for betting — you enter it once the first time you open the app. "
+    "The Bet Tracker shows it growing or shrinking as your real bets settle: green with a + when you're up since you started, "
+    "red with a − when you're below it. On Today's Games, the app reads your current bankroll and the day's value bets and "
+    "auto-fills a suggested daily budget for your Real bet slip, sized with the Kelly formula and your chosen risk level.",
+    "Only real bets move your bankroll — paper bets never touch it.",
+)
+
+render_callout(
+    "Risk Level",
+    "A Conservative / Moderate / Aggressive control on the Real bet slip that scales the recommended daily budget. "
+    "Conservative commits the least of your bankroll, Aggressive the most, and Moderate is the balanced default. "
+    "The budget is only a suggestion — you can always type your own.",
+    "Conservative ≈ ⅛-Kelly capped at 5% of bankroll · Moderate ≈ ¼-Kelly at 10% · Aggressive ≈ ⅜-Kelly at 20%",
 )
 
 render_callout(
@@ -332,6 +349,13 @@ with st.expander("Show tips", expanded=False):
             "The app only shows Caesars lines",
             "Caesars (williamhill_us) is the only legally available sportsbook in Puerto Rico shown in the app. "
             "All odds, CLV, and edge calculations are relative to Caesars lines.",
+        ),
+        (
+            "Set your bankroll once, then let the app size your daily budget",
+            "The first time you open the app you'll enter your betting bankroll. After that, Today's Games auto-fills a "
+            "suggested daily budget for your Real bet slip from your current bankroll, the day's value bets, and your "
+            "risk level — then splits it across your picks. Nudge the Conservative / Moderate / Aggressive selector to "
+            "bet more or less, and remember only real bets change your bankroll.",
         ),
     ]
     for title_text, body_text in tips:

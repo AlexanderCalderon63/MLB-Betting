@@ -20,6 +20,7 @@ from ingestion.stats_scraper import get_full_team_stats
 from models.predictor import MLBPredictor, build_matchup_features, evaluate_value
 from theme import init_theme, palette
 from ui import responsive_table
+from bankroll import require_balance
 
 init_db()
 
@@ -32,6 +33,10 @@ st.set_page_config(
 init_theme("#4f46e5")   # indigo — dashboard
 
 _c = palette()
+
+# Gate the app on a one-time bankroll entry. No-op (no DB hit) once set this
+# session, so a returning user's startup is unaffected.
+require_balance()
 
 # Hero is rendered below, once the 30-day stats it summarizes are computed.
 

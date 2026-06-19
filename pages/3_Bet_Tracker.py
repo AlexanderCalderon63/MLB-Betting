@@ -14,14 +14,21 @@ from database import get_connection, init_db
 from ingestion.auto_resolver import batch_resolve_bets, refresh_closing_odds, _lookup_closing_odds_cache
 from theme import init_theme, palette
 from ui import responsive_chart, responsive_table
+from bankroll import require_balance, get_balance_state, render_balance_card
 
 init_db()
 
 st.set_page_config(page_title="Bet Tracker", page_icon="📒", layout="wide")
 init_theme("#7c3aed")   # violet — bet tracker
+require_balance()
 
 st.title("📒 Bet Tracker")
 st.caption("Log your bets, track ROI, and measure Closing Line Value to validate your edge")
+
+# Bankroll hero — current balance (starting + realized real-bet P&L) vs. start.
+_bal = get_balance_state()
+if _bal:
+    render_balance_card(_bal)
 
 # --- Log a New Bet ---
 with st.expander("➕ Log a New Bet", expanded=False):

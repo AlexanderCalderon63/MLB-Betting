@@ -30,3 +30,4 @@ Thumbs.db
 
 # Claude
 .claude/skills
+.claude/settings.json
