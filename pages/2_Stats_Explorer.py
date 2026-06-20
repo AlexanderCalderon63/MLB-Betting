@@ -7,11 +7,16 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 from ingestion.stats_scraper import get_full_team_stats
+from database import init_db
 from theme import init_theme, palette
 from ui import responsive_chart, responsive_table
+from auth import require_login
+
+init_db()   # ensure schema (incl. users) exists even if this is the entry page
 
 st.set_page_config(page_title="Stats Explorer", page_icon="📊", layout="wide")
 init_theme("#0f766e")   # teal — stats explorer
+require_login()
 
 st.title("📊 Team Stats Explorer")
 st.caption("Season-level data scraped from Baseball Reference — the features powering the model")

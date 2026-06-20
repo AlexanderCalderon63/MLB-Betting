@@ -326,8 +326,9 @@ def load_training_data(min_season: int = 2023) -> tuple:
 
     Only seasons >= min_season are used for training (default 2023) so that
     older data is available for backtesting without affecting the live model.
-    Paper bets with completed outcomes and feature data are always included
-    since they are logged in real time.
+    Resolved logged bets with feature data — paper AND real, pooled across ALL
+    users (never user-filtered) — are always appended since they're logged in
+    real time (1.6).
 
     If pitcher columns are populated, returns 10 features (6 team + 4 pitcher).
     Falls back to 6 team-only features if pitcher data is absent.
@@ -339,14 +340,22 @@ def load_training_data(min_season: int = 2023) -> tuple:
         params=(min_season,),
     )
 
-    # Load paper bets that have outcomes and feature data logged from Bet Sizing
-    paper = pd.DataFrame()
+    # Load resolved logged bets that carry model features — BOTH paper and real,
+    # pooled across ALL users (1.6). They train the model in real time alongside
+    # the historical_games backfill. Real bets only have features when logged from
+    # Today's Games; manually-logged bets leave them NULL and are filtered out.
+    logged = pd.DataFrame()
     try:
-        paper = pd.read_sql_query("""
-            SELECT * FROM paper_bets
-            WHERE outcome IN ('Win', 'Loss')
-            AND win_pct_diff IS NOT NULL
-        """, conn)
+        frames = [
+            pd.read_sql_query(
+                f"SELECT * FROM {tbl} WHERE outcome IN ('Win', 'Loss') AND win_pct_diff IS NOT NULL",
+                conn,
+            )
+            for tbl in ("paper_bets", "bets")
+        ]
+        frames = [f for f in frames if not f.empty]
+        if frames:
+            logged = pd.concat(frames, ignore_index=True)
     except Exception:
         pass
     conn.close()
@@ -403,30 +412,31 @@ def load_training_data(min_season: int = 2023) -> tuple:
         seasons = sorted(df["season"].dropna().astype(int).unique())
         print(f"[HIST] Loaded {len(X):,} samples (team-only fallback) | seasons: {seasons}")
 
-    # Append paper bets — derive home_win from bet_on + outcome, use stored feature diffs
-    if not paper.empty:
-        paper["home_win"] = paper.apply(
+    # Append logged bets (paper + real) — derive home_win from bet_on + outcome,
+    # use the stored feature diffs.
+    if not logged.empty:
+        logged["home_win"] = logged.apply(
             lambda r: (1 if r["outcome"] == "Win" else 0)
                       if r["bet_on"] == r["home_team"]
                       else (0 if r["outcome"] == "Win" else 1),
             axis=1,
         ).astype(int)
 
-        paper_X = paper[BASE_TEAM_COLS].copy()
+        logged_X = logged[BASE_TEAM_COLS].copy()
         if "recent_form_diff" in X.columns:
-            paper_X["recent_form_diff"] = 0.0
+            logged_X["recent_form_diff"] = 0.0
         for col in PITCHER_DIFF:
-            if col in paper.columns:
-                paper_X[col] = paper[col].fillna(0.0)
+            if col in logged.columns:
+                logged_X[col] = logged[col].fillna(0.0)
             elif col in X.columns:
-                paper_X[col] = 0.0
+                logged_X[col] = 0.0
 
-        paper_X = paper_X.reindex(columns=X.columns, fill_value=0.0)
-        paper_y = paper["home_win"]
+        logged_X = logged_X.reindex(columns=X.columns, fill_value=0.0)
+        logged_y = logged["home_win"]
 
-        X = pd.concat([X, paper_X], ignore_index=True)
-        y = pd.concat([y, paper_y], ignore_index=True)
-        print(f"[HIST] Appended {len(paper)} paper bets (total training samples: {len(X):,})")
+        X = pd.concat([X, logged_X], ignore_index=True)
+        y = pd.concat([y, logged_y], ignore_index=True)
+        print(f"[HIST] Appended {len(logged)} logged bets (total training samples: {len(X):,})")
 
     return X, y
 

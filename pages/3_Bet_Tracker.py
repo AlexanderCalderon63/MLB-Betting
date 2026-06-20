@@ -15,18 +15,27 @@ from ingestion.auto_resolver import batch_resolve_bets, refresh_closing_odds, _l
 from theme import init_theme, palette
 from ui import responsive_chart, responsive_table
 from bankroll import require_balance, get_balance_state, render_balance_card
+from bet_analytics import roi_breakdown, signal_tier, calibration, TIER_ORDER
+from auth import require_login, selected_user_id, current_user_id, user_clause, owner_clause
 
 init_db()
 
 st.set_page_config(page_title="Bet Tracker", page_icon="📒", layout="wide")
 init_theme("#7c3aed")   # violet — bet tracker
+require_login()
 require_balance()
 
 st.title("📒 Bet Tracker")
 st.caption("Log your bets, track ROI, and measure Closing Line Value to validate your edge")
 
-# Bankroll hero — current balance (starting + realized real-bet P&L) vs. start.
-_bal = get_balance_state()
+# Whose bets this page shows: regular users → themselves; admin → a sidebar
+# picker defaulting to themselves, or "All users" (1.5.1).
+view_uid = selected_user_id()
+_uclause, _uparams = user_clause(view_uid)
+
+# Bankroll hero — the viewed user's current balance vs. their start. The admin's
+# "all users" view has no single bankroll, so it falls back to the admin's own.
+_bal = get_balance_state(view_uid if view_uid is not None else current_user_id())
 if _bal:
     render_balance_card(_bal)
 
@@ -52,9 +61,9 @@ with st.expander("➕ Log a New Bet", expanded=False):
     if submitted and home_team and away_team:
         conn = get_connection()
         conn.execute("""
-            INSERT INTO bets (game_date, home_team, away_team, bet_on, odds, stake, model_prob, implied_prob, notes)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (str(game_date), home_team, away_team, bet_on, int(odds), stake, model_prob, implied_prob, notes))
+            INSERT INTO bets (game_date, home_team, away_team, bet_on, odds, stake, model_prob, implied_prob, notes, user_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (str(game_date), home_team, away_team, bet_on, int(odds), stake, model_prob, implied_prob, notes, current_user_id()))
         conn.commit()
         conn.close()
         st.success("Bet logged!")
@@ -64,7 +73,9 @@ st.divider()
 
 # --- Load Bets ---
 conn = get_connection()
-bets_raw = pd.read_sql("SELECT * FROM bets ORDER BY game_date DESC, id DESC", conn)
+bets_raw = pd.read_sql(
+    f"SELECT * FROM bets{_uclause} ORDER BY game_date DESC, id DESC", conn, params=_uparams
+)
 conn.close()
 
 if bets_raw.empty:
@@ -90,7 +101,8 @@ with st.expander("🗑️ Delete a Bet", expanded=False):
     confirm = st.checkbox("I'm sure I want to permanently delete this bet", key="del_bet_confirm")
     if st.button("🗑️ Delete Bet", type="primary", disabled=not confirm, key="del_bet_btn"):
         conn_del = get_connection()
-        conn_del.execute("DELETE FROM bets WHERE id = ?", (int(del_id),))
+        _oc, _op = owner_clause()   # a regular user can only delete their own rows
+        conn_del.execute(f"DELETE FROM bets WHERE id = ?{_oc}", (int(del_id), *_op))
         conn_del.commit()
         conn_del.close()
         st.success("Bet deleted.")
@@ -179,14 +191,15 @@ with st.expander("✏️ Update Bet Outcomes", expanded=False):
                 if res["outcome"] == "NoCacheData":
                     messages.append(f"⚠️ Not resolved — {res['note']}")
                     continue
-                conn_ar.execute("""
+                _oc, _op = owner_clause()
+                conn_ar.execute(f"""
                     UPDATE bets SET outcome=?, profit_loss=?, closing_odds=?,
                                     closing_implied_prob=?, clv=?
-                    WHERE id=?
+                    WHERE id=?{_oc}
                 """, (
                     res["outcome"], res["profit_loss"],
                     int(res["closing_odds"]) if res["closing_odds"] is not None else None,
-                    res["closing_implied_prob"], res["clv"], res["id"],
+                    res["closing_implied_prob"], res["clv"], res["id"], *_op,
                 ))
                 resolved_count += 1
                 icon = "✅" if res["outcome"] == "Win" else ("❌" if res["outcome"] == "Loss" else "⏸️")
@@ -263,12 +276,13 @@ with st.expander("✏️ Update Bet Outcomes", expanded=False):
                     clv      = cl_prob - bet_prob
 
                 conn2 = get_connection()
-                conn2.execute("""
+                _oc, _op = owner_clause()
+                conn2.execute(f"""
                     UPDATE bets SET outcome=?, profit_loss=?, closing_odds=?, closing_implied_prob=?, clv=?
-                    WHERE id=?
+                    WHERE id=?{_oc}
                 """, (outcome, pnl,
                       int(closing_odds_val) if closing_odds_val is not None else None,
-                      cl_prob, clv, row["id"]))
+                      cl_prob, clv, row["id"], *_op))
                 conn2.commit()
                 conn2.close()
                 st.rerun()
@@ -383,3 +397,53 @@ if not completed.empty:
             font=dict(family="Manrope", color=_c["plot_font"]),
         )
         responsive_chart(fig2, key="bt_hist")
+
+    # --- Betting Analytics — your real ROI sliced by the model's own dimensions ---
+    st.divider()
+    st.subheader("📊 Betting Analytics")
+    st.caption(
+        "Your settled real bets sliced by signal strength, side, and month — "
+        "the feedback loop on whether following the model actually pays off."
+    )
+
+    _edge  = pd.to_numeric(completed["model_prob"], errors="coerce") - pd.to_numeric(completed["implied_prob"], errors="coerce")
+    _tier  = _edge.map(signal_tier)
+    _oddsn = pd.to_numeric(completed["odds"], errors="coerce")
+    _side  = _oddsn.map(lambda o: "Favorite (−)" if o < 0 else ("Underdog (+)" if o > 0 else None))
+
+    def _venue(r):
+        bet = str(r["bet_on"]).strip()
+        if bet == str(r["home_team"]).strip(): return "Home team"
+        if bet == str(r["away_team"]).strip(): return "Away team"
+        return None
+    _venue_b = completed.apply(_venue, axis=1)
+
+    _month  = pd.to_datetime(completed["game_date"], errors="coerce").dt.strftime("%Y-%m")
+    _morder = sorted(m for m in _month.dropna().unique())
+
+    _NUM    = ["Bets", "Win%", "Staked ($)", "P&L ($)", "ROI %"]
+    _SIGNED = ["P&L ($)", "ROI %"]
+
+    st.markdown("**By signal tier** — surfaces slight-edge bets that quietly drain ROI.")
+    responsive_table(roi_breakdown(completed, _tier, "Signal Tier", order=TIER_ORDER),
+                     key="bt_an_tier", numeric_cols=_NUM, signed_cols=_SIGNED)
+
+    st.markdown("**Favorite vs. underdog**")
+    responsive_table(roi_breakdown(completed, _side, "Side"),
+                     key="bt_an_side", numeric_cols=_NUM, signed_cols=_SIGNED)
+
+    st.markdown("**Home vs. away pick** — the model bakes in a fixed home edge; check your real split.")
+    responsive_table(roi_breakdown(completed, _venue_b, "Pick"),
+                     key="bt_an_venue", numeric_cols=_NUM, signed_cols=_SIGNED)
+
+    st.markdown("**Month over month**")
+    responsive_table(roi_breakdown(completed, _month, "Month", order=_morder),
+                     key="bt_an_month", numeric_cols=_NUM, signed_cols=_SIGNED)
+
+    _cal = calibration(completed)
+    if not _cal.empty:
+        st.markdown("**Model calibration** — predicted win rate vs. how your Win/Loss bets actually landed.")
+        responsive_table(_cal, key="bt_an_cal",
+                         numeric_cols=["Bets", "Predicted Win%", "Actual Win%"])
+    else:
+        st.caption("📉 Calibration unlocks after 10+ settled Win/Loss bets.")

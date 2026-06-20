@@ -28,12 +28,17 @@ from models.predictor import MLBPredictor, build_matchup_features, evaluate_valu
 from database import init_db, get_connection
 from theme import init_theme, palette
 from ui import responsive_chart
+from auth import require_login, selected_user_id, current_user_id, user_clause, owner_clause
 
 init_db()
 
 st.set_page_config(page_title="Parlays", page_icon="🎰", layout="wide")
 init_theme("#c2410c")   # burnt orange — the parlay identity
+require_login()
 _c = palette()
+
+# Whose parlays the Track tab shows (admin → sidebar picker, default self; 1.5.1).
+view_uid = selected_user_id()
 
 BASE_MLB = "https://statsapi.mlb.com/api/v1"
 HEADERS  = {"User-Agent": "Mozilla/5.0 (compatible; mlb-betting-app/1.0)"}
@@ -143,9 +148,9 @@ def _log_parlay(book, budget, legs, p_american, net, notes) -> None:
     """Persist a parlay and its legs. `legs` items need team/odds/game_date/home/away."""
     conn = get_connection()
     cur = conn.execute(
-        "INSERT INTO parlays (created_date, sportsbook, stake, legs_count, parlay_odds, potential_payout, notes) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?)",
-        (str(date.today()), book, budget, len(legs), p_american, net, notes),
+        "INSERT INTO parlays (created_date, sportsbook, stake, legs_count, parlay_odds, potential_payout, notes, user_id) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (str(date.today()), book, budget, len(legs), p_american, net, notes, current_user_id()),
     )
     parlay_id = cur.lastrowid
     for leg in legs:
@@ -466,7 +471,8 @@ def _get_game_result(game_date: str, home_team: str, away_team: str, bet_on: str
 def _fetch_and_resolve(parlay_id: int) -> str:
     """Check each pending leg; mark the parlay Lost on first failure, Won when all hit."""
     conn = get_connection()
-    row  = conn.execute("SELECT * FROM parlays WHERE id = ?", (parlay_id,)).fetchone()
+    _oc, _op = owner_clause()   # a regular user can only resolve their own parlays
+    row  = conn.execute(f"SELECT * FROM parlays WHERE id = ?{_oc}", (parlay_id, *_op)).fetchone()
     legs = conn.execute("SELECT * FROM parlay_legs WHERE parlay_id = ?", (parlay_id,)).fetchall()
     if not row or not legs:
         conn.close()
@@ -508,9 +514,12 @@ def _fetch_and_resolve(parlay_id: int) -> str:
     return msg
 
 
-def render_track() -> None:
+def render_track(uid) -> None:
     conn     = get_connection()
-    parlays  = pd.read_sql("SELECT * FROM parlays ORDER BY created_date DESC, id DESC", conn)
+    uclause, uparams = user_clause(uid)
+    parlays  = pd.read_sql(
+        f"SELECT * FROM parlays{uclause} ORDER BY created_date DESC, id DESC", conn, params=uparams
+    )
     legs_all = pd.read_sql("SELECT * FROM parlay_legs", conn)
     conn.close()
 
@@ -620,8 +629,9 @@ def render_track() -> None:
                     if st.form_submit_button("Confirm Cashout"):
                         profit = round(payout - row["stake"], 2)
                         conn2  = get_connection()
-                        conn2.execute("UPDATE parlays SET outcome = 'Cashout', profit_loss = ? WHERE id = ?",
-                                      (profit, pid))
+                        _oc, _op = owner_clause()
+                        conn2.execute(f"UPDATE parlays SET outcome = 'Cashout', profit_loss = ? WHERE id = ?{_oc}",
+                                      (profit, pid, *_op))
                         conn2.execute("UPDATE parlay_legs SET result = 'Cashout' WHERE parlay_id = ? AND result IS NULL",
                                       (pid,))
                         conn2.commit()
@@ -704,4 +714,4 @@ with tab_build:
     render_build()
 
 with tab_track:
-    render_track()
+    render_track(view_uid)

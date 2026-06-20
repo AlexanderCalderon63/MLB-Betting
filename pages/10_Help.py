@@ -8,11 +8,13 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 import streamlit as st
 from database import init_db
 from theme import init_theme, palette
+from auth import require_login
 
 init_db()
 
 st.set_page_config(page_title="Help & Tutorial", page_icon="📖", layout="wide")
 init_theme("#6366f1")   # violet — help/docs
+require_login()
 c = palette()
 
 
@@ -122,6 +124,58 @@ st.markdown(
 )
 
 
+# ── Section: Accounts & sign-in ───────────────────────────────────────────────
+
+st.subheader("Accounts & sign-in")
+
+render_steps(
+    [
+        {
+            "step": 1,
+            "title": "Create your account",
+            "body": "On the sign-in screen, open <b>Create account</b>. Pick a username and a strong password "
+                    "(8+ characters with an uppercase letter, a number, and a symbol), then set a security question "
+                    "you'll remember.",
+            "tip": "Your password is stored as a one-way scrambled hash — nobody, not even the app owner, can read it back.",
+        },
+        {
+            "step": 2,
+            "title": "Sign in",
+            "body": "Enter your username and password on the <b>Sign in</b> tab. Your session stays active as you move "
+                    "between pages.",
+        },
+        {
+            "step": 3,
+            "title": "Forgot your password?",
+            "body": "On the <b>Forgot password</b> tab, type your username, answer your security question, and set a "
+                    "new password — no email needed.",
+        },
+        {
+            "step": 4,
+            "title": "Sign out",
+            "body": "Use <b>Sign out</b> in the sidebar whenever you're done. For safety, you're also signed out "
+                    "automatically after 10 minutes of inactivity.",
+        },
+    ],
+    title="Getting into the app",
+)
+
+render_callout(
+    "Your data is your own",
+    "Every bet, parlay, and bankroll figure is tied to your account. You only ever see your own — the dashboard, "
+    "trackers, Live Scores, and Parlays are all filtered to you.",
+)
+
+render_callout(
+    "Admins vs. members",
+    "Most people are <b>members</b>: full access to their own bets and today's value board. An <b>admin</b> can see "
+    "every user's data, gets a <b>Viewing data for</b> picker in the sidebar to filter by person (it defaults to "
+    "themselves), and can open the Model Performance page. Either way, the model learns from everyone's bets — real and paper.",
+)
+
+st.divider()
+
+
 # ── Section 2: Quick start ─────────────────────────────────────────────────────
 
 st.subheader("Quick start")
@@ -172,49 +226,41 @@ render_feature_grid([
         "icon": "🏠",
         "name": "Dashboard",
         "desc": "Your 30-day P&L summary and today's top value bets at a glance. Start here each morning.",
-        "page": "app.py (home)",
     },
     {
         "icon": "⚾",
         "name": "Today's Games",
         "desc": "Full odds table with model probabilities, pitcher context, park factors, and the Bet Slip. Main daily workflow.",
-        "page": "1_Todays_Games",
     },
     {
         "icon": "📊",
         "name": "Stats Explorer",
         "desc": "Team standings, Pythagorean win%, run differential, and home/away splits. Use for background research on a matchup.",
-        "page": "2_Stats_Explorer",
     },
     {
         "icon": "📒",
         "name": "Bet Tracker",
         "desc": "See your current bankroll vs. where you started, log real bets, resolve outcomes, and view your P&L chart, ROI, and Closing Line Value.",
-        "page": "3_Bet_Tracker",
     },
     {
         "icon": "🧠",
         "name": "Model Performance",
-        "desc": "Calibration curve, tier win rates, edge vs. outcome scatter, and the retrain button. Check monthly.",
-        "page": "5_Model_Performance",
+        "desc": "Calibration curve, tier win rates, edge vs. outcome scatter, and the retrain button. Admins only.",
     },
     {
         "icon": "📺",
         "name": "Live Scores",
         "desc": "Inning-by-inning box scores for today's games. Refresh during games to follow along.",
-        "page": "6_Live_Scores",
     },
     {
         "icon": "📝",
         "name": "Paper Bet Tracker",
         "desc": "Track hypothetical bets risk-free. Outcomes feed the model's training data — useful even before you bet real money.",
-        "page": "7_Paper_Bet_Tracker",
     },
     {
         "icon": "🎰",
         "name": "Parlays",
         "desc": "One page, two tabs: Build model-scored parlays from today's value bets, then Track their win rate, ROI, and P&L as they settle.",
-        "page": "8_Parlays",
     },
 ])
 

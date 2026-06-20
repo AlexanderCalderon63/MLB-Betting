@@ -279,8 +279,8 @@ def init_db(force: bool = False):
         )
     """)
 
-    # One row, written once: the user's starting bankroll. Current balance is
-    # derived (initial + realized real-bet P&L) — see bankroll.py.
+    # One row per user: their starting bankroll. Current balance is derived
+    # (initial + realized real-bet P&L) — see bankroll.py.
     conn.execute("""
         CREATE TABLE IF NOT EXISTS bankroll (
             id SERIAL PRIMARY KEY,
@@ -289,8 +289,27 @@ def init_db(force: bool = False):
         )
     """)
 
+    # User accounts. Passwords + security answers are stored as salted one-way
+    # hashes (see auth.py) — never plaintext, never reversible. Role gates access:
+    # 'admin' sees every user's data + all pages; 'user' sees only their own.
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            id SERIAL PRIMARY KEY,
+            username TEXT NOT NULL UNIQUE,
+            password_hash TEXT NOT NULL,
+            role TEXT NOT NULL DEFAULT 'user',
+            email TEXT,
+            security_question TEXT,
+            security_answer_hash TEXT,
+            is_active BOOLEAN DEFAULT TRUE,
+            created_at TEXT DEFAULT NOW()::TEXT
+        )
+    """)
+
     _migrate_pitcher_columns(conn)
     _migrate_last_ten_columns(conn)
+    _migrate_user_id_columns(conn)
+    _migrate_bet_feature_columns(conn)
 
     conn.commit()
     conn.close()
@@ -304,6 +323,32 @@ def _migrate_last_ten_columns(conn: _PgConn):
         col_name = col_def.split()[0]
         if col_name not in existing:
             conn.execute(f"ALTER TABLE historical_games ADD COLUMN {col_def}")
+    conn.commit()
+
+
+def _migrate_user_id_columns(conn: _PgConn):
+    """Add user_id to every table holding per-user data. New column is NULL —
+    existing rows are adopted by the first (admin) user at account-creation time
+    (auth.create_user), per 1.3.7."""
+    for table in ("bets", "paper_bets", "parlays", "bankroll"):
+        if "user_id" not in _col_names(conn, table):
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN user_id INTEGER")
+    conn.commit()
+
+
+def _migrate_bet_feature_columns(conn: _PgConn):
+    """Mirror paper_bets' model-feature columns onto bets so resolved REAL bets
+    can also train the model (1.6). Populated when logging a real bet from
+    Today's Games; manual logs leave them NULL and simply don't feed training."""
+    existing = _col_names(conn, "bets")
+    feature_cols = [
+        "win_pct_diff REAL", "pythag_diff REAL", "run_diff_diff REAL",
+        "rs_diff REAL", "ra_diff REAL", "home_advantage REAL",
+        "sp_era_diff REAL", "sp_whip_diff REAL", "sp_k9_diff REAL", "sp_bb9_diff REAL",
+    ]
+    for col_def in feature_cols:
+        if col_def.split()[0] not in existing:
+            conn.execute(f"ALTER TABLE bets ADD COLUMN {col_def}")
     conn.commit()
 
 
