@@ -181,6 +181,15 @@ section[data-testid="stSidebar"] h2, section[data-testid="stSidebar"] h3 {{ colo
 [data-testid="stSidebarNav"] a:hover {{ background: {c['surface2']} !important; }}
 [data-testid="stSidebarNav"] a[aria-current="page"] {{ background: {c['accent_dim']} !important; }}
 [data-testid="stSidebarNav"] a[aria-current="page"] span {{ color: {c['accent']} !important; font-weight: 700; }}
+/* Relabel the entry page's nav item "app" → "Dashboard" — display only; the file
+   stays app.py. Overlays the new label on the hidden original so font, colour, and
+   the active-state styling above all carry over. */
+[data-testid="stSidebarNav"] ul li:first-child a {{ overflow: visible !important; }}
+[data-testid="stSidebarNav"] ul li:first-child a span {{ visibility: hidden; position: relative; overflow: visible !important; }}
+[data-testid="stSidebarNav"] ul li:first-child a span::after {{
+    content: "Dashboard"; visibility: visible; position: absolute;
+    left: 0; top: 0; white-space: nowrap;
+}}
 
 /* ── Text ── */
 [data-testid="stAppViewContainer"] p,

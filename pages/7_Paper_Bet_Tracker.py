@@ -33,8 +33,9 @@ _c = palette()
 st.markdown(f"""
 <div style="background:{_c['surface2']}; border:1px solid {_c['border']}; border-radius:10px;
             padding:0.9rem 1.2rem; margin-bottom:1.2rem; font-size:0.875rem; color:{_c['text2']};">
-    💡 Paper bets logged via <strong>Bet Sizing</strong> include feature data and improve model predictions
-    once outcomes are recorded here. Bets logged manually below are tracked but do not feed model training.
+    💡 Paper bets you add from the <strong>Today's Games</strong> bet slip carry the model's feature data, so
+    their outcomes sharpen future predictions once you resolve them here. Bets you log by hand below are tracked
+    but don't feed model training.
 </div>
 """, unsafe_allow_html=True)
 
@@ -78,7 +79,7 @@ bets_raw = pd.read_sql(
 conn.close()
 
 if bets_raw.empty:
-    st.info("No paper bets logged yet. Use the Bet Sizing page to quickly log paper bets for all today's games.")
+    st.info("No paper bets logged yet. Add them from the **Today's Games** bet slip to cover the whole slate at once, or use **➕ Log a New Paper Bet** above.")
     st.stop()
 
 # --- Delete a Paper Bet ---
@@ -328,13 +329,13 @@ if not completed.empty:
     <div style="font-size:0.72rem; color:{_c['muted']}; font-weight:600; text-transform:uppercase; letter-spacing:0.07em; margin-bottom:6px;">Avg CLV ⓘ</div>
     <div style="font-size:2rem; font-weight:800; font-family:'Manrope',sans-serif; color:{clv_color};">{avg_clv:+.2f}%</div>
   </div>
-  <div class="stat-box" style="flex:1; min-width:130px;" title="Completed paper bets with feature data logged via Bet Sizing — these feed model training on next retrain.">
+  <div class="stat-box" style="flex:1; min-width:130px;" title="Completed paper bets with feature data logged from the Today's Games bet slip — these feed model training on next retrain.">
     <div style="font-size:0.72rem; color:{_c['muted']}; font-weight:600; text-transform:uppercase; letter-spacing:0.07em; margin-bottom:6px;">Training Ready ⓘ</div>
     <div style="font-size:2rem; font-weight:800; font-family:'Manrope',sans-serif; color:{_c['accent']};">{training_ready}</div>
   </div>
 </div>
 <div style="font-size:0.78rem; color:{_c['muted']}; margin-bottom:1.5rem;">
-    {has_features} of {len(bets_raw)} total paper bets include feature data from Bet Sizing (model training eligible once outcomes are saved).
+    {has_features} of {len(bets_raw)} total paper bets include feature data from the Today's Games bet slip (model training eligible once outcomes are saved).
 </div>
 """, unsafe_allow_html=True)
 
