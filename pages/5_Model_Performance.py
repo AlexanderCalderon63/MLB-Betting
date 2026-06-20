@@ -18,6 +18,7 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.pipeline import Pipeline
 from theme import init_theme, palette
 from ui import responsive_chart, responsive_table
+from auth import require_login, is_admin
 
 init_db()
 
@@ -128,6 +129,15 @@ def _run_seasonal_holdout() -> tuple:
 
 st.set_page_config(page_title="Model Performance", page_icon="📊", layout="wide")
 init_theme("#2563eb")   # blue — model performance
+require_login()
+
+# Admins only (1.5.1). The page is hidden from the nav for regular users; this is
+# the hard gate in case someone reaches it by URL. Model diagnostics below read
+# every user's bets unfiltered — by design, the model pools all users (1.6).
+if not is_admin():
+    st.title("📊 Model Performance")
+    st.warning("This page is for admins only. Head back to the dashboard for your bets and today's value board.")
+    st.stop()
 
 st.title("📊 Model Performance")
 st.caption("Calibration and signal tier analysis — how well does the model's confidence match reality?")

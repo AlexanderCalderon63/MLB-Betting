@@ -21,6 +21,7 @@ from models.predictor import MLBPredictor, build_matchup_features, evaluate_valu
 from theme import init_theme, palette
 from ui import responsive_table
 from bankroll import require_balance
+from auth import require_login, selected_user_id, user_clause
 
 init_db()
 
@@ -34,9 +35,15 @@ init_theme("#4f46e5")   # indigo — dashboard
 
 _c = palette()
 
-# Gate the app on a one-time bankroll entry. No-op (no DB hit) once set this
-# session, so a returning user's startup is unaffected.
+# Gate on a valid session first, then on a one-time bankroll entry. Both are
+# no-ops (no DB hit) once satisfied this session.
+require_login()
 require_balance()
+
+# Whose data this dashboard shows. Regular users → themselves; admin → a sidebar
+# picker defaulting to themselves, or "All users" (1.5.1).
+view_uid = selected_user_id()
+_uclause, _uparams = user_clause(view_uid, has_where=True)
 
 # Hero is rendered below, once the 30-day stats it summarizes are computed.
 
@@ -50,12 +57,14 @@ cutoff_30 = (date.today() - timedelta(days=30)).isoformat()
 conn = get_connection()
 
 real_bets = pd.read_sql(
-    "SELECT * FROM bets WHERE game_date >= ?", conn, params=(cutoff_30,)
+    f"SELECT * FROM bets WHERE game_date >= ?{_uclause}",
+    conn, params=(cutoff_30, *_uparams),
 )
 paper_bets = pd.DataFrame()
 try:
     paper_bets = pd.read_sql(
-        "SELECT * FROM paper_bets WHERE game_date >= ?", conn, params=(cutoff_30,)
+        f"SELECT * FROM paper_bets WHERE game_date >= ?{_uclause}",
+        conn, params=(cutoff_30, *_uparams),
     )
 except Exception:
     pass

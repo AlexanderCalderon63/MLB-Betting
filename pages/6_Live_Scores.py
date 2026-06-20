@@ -10,6 +10,7 @@ import requests
 from datetime import datetime, timezone, timedelta
 from database import get_connection, init_db
 from theme import init_theme, palette
+from auth import require_login, selected_user_id, user_clause
 
 init_db()
 
@@ -17,10 +18,15 @@ BASE = "https://statsapi.mlb.com/api/v1"
 
 st.set_page_config(page_title="Live Scores", page_icon="📺", layout="wide")
 init_theme("#be185d")   # pink — live scores
+require_login()
 c = palette()   # active theme colors for inline HTML
 
 st.title("📺 Live Box Scores")
 st.caption("Inning-by-inning scores for today's MLB games · Press refresh to update")
+
+# Live Scores tags games you bet on — keep it to the viewed user's bets, never a
+# mix across users (1.5). Admin → sidebar picker (default self).
+view_uid = selected_user_id()
 
 # ── Controls ───────────────────────────────────────────────────────────────────
 col_btn, col_toggle, col_time = st.columns([1, 2, 2])
@@ -54,11 +60,12 @@ def fetch_todays_schedule(date_str: str) -> list:
     return games
 
 
-def load_todays_bets(date_str: str) -> list[dict]:
+def load_todays_bets(date_str: str, uid: int | None) -> list[dict]:
     conn = get_connection()
+    uclause, uparams = user_clause(uid, has_where=True)
     rows = conn.execute(
-        "SELECT home_team, away_team, bet_on, odds, outcome FROM bets WHERE game_date = ?",
-        (date_str,),
+        f"SELECT home_team, away_team, bet_on, odds, outcome FROM bets WHERE game_date = ?{uclause}",
+        (date_str, *uparams),
     ).fetchall()
     conn.close()
     return [dict(r) for r in rows]
@@ -255,7 +262,7 @@ today_str = datetime.now().strftime("%Y-%m-%d")
 
 with st.spinner("Loading today's schedule..."):
     games    = fetch_todays_schedule(today_str)
-    bets     = load_todays_bets(today_str)
+    bets     = load_todays_bets(today_str, view_uid)
 
 if not games:
     st.warning("No games found for today via MLB Stats API.")

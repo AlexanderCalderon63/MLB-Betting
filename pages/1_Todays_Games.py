@@ -21,6 +21,7 @@ from models.predictor import MLBPredictor, build_matchup_features, evaluate_valu
 from database import init_db, get_connection
 from theme import init_theme, palette
 from bankroll import require_balance, get_balance_state, recommend_daily_budget, RISK_LEVELS, DEFAULT_RISK
+from auth import require_login, current_user_id
 from ingestion.park_weather import park_factor_badge, weather_badges, get_weather
 
 init_db()
@@ -28,6 +29,7 @@ init_db()
 st.set_page_config(page_title="Today's Games", page_icon="⚾", layout="wide")
 init_theme("#0e7490")   # cyan — today's games
 c = palette()   # active theme colors — reused by inline HTML + helper functions
+require_login()     # gate on a valid session before anything loads
 require_balance()   # bankroll gates the budget recommendation below; no-op once set
 
 st.title("⚾ Today's MLB Games")
@@ -356,7 +358,7 @@ for base_id, entries in sorted_games:
 # engine, scaled by the chosen risk level, then auto-assign it as the Real slip
 # budget. Computed here (before the stake pre-fill below) so stakes distribute
 # across the recommended total. Paper betting is untouched.
-_bal_state = get_balance_state()
+_bal_state = get_balance_state(current_user_id())
 _risk = st.session_state.get("risk_level", DEFAULT_RISK)
 
 _value_kelly = []
@@ -1511,15 +1513,26 @@ with st.sidebar:
                 if rc["stake"] == 0:
                     continue
                 g = rc["game"]
+                f = rc["features"]
+                # Store the model features alongside the bet so resolved real bets
+                # can also train the model (1.6), mirroring paper bets.
                 conn.execute("""
                     INSERT INTO bets
-                        (game_date, home_team, away_team, bet_on, odds, stake, model_prob, implied_prob, notes)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        (game_date, home_team, away_team, bet_on, odds, stake, model_prob, implied_prob, notes,
+                         user_id,
+                         win_pct_diff, pythag_diff, run_diff_diff, rs_diff, ra_diff, home_advantage,
+                         sp_era_diff, sp_whip_diff, sp_k9_diff, sp_bb9_diff)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
                     str(date.today()),
                     g["home_team"], g["away_team"], rc["team"],
                     int(rc["odds"]), rc["stake"], rc["model_prob"], rc["impl_prob"],
                     f"Via {rc['bookmaker']} · Edge: {rc['edge']*100:+.1f}%",
+                    current_user_id(),
+                    f.get("win_pct_diff"), f.get("pythag_diff"), f.get("run_diff_diff"),
+                    f.get("rs_diff"), f.get("ra_diff"), f.get("home_advantage"),
+                    f.get("sp_era_diff"), f.get("sp_whip_diff"),
+                    f.get("sp_k9_diff"), f.get("sp_bb9_diff"),
                 ))
                 logged += 1
             conn.commit()
@@ -1621,16 +1634,16 @@ with st.sidebar:
                     conn.execute("""
                         INSERT INTO paper_bets (
                             game_date, home_team, away_team, bet_on, odds, stake,
-                            model_prob, implied_prob, notes,
+                            model_prob, implied_prob, notes, user_id,
                             win_pct_diff, pythag_diff, run_diff_diff, rs_diff, ra_diff, home_advantage,
                             sp_era_diff, sp_whip_diff, sp_k9_diff, sp_bb9_diff
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """, (
                         str(date.today()),
                         item["g"]["home_team"], item["g"]["away_team"],
                         item["rec_team"], int(item["rec_odds"]),
                         item["stake"], item["model_p"], item["impl_p"],
-                        f"Edge: {item['rec_edge']*100:+.1f}%",
+                        f"Edge: {item['rec_edge']*100:+.1f}%", current_user_id(),
                         feats.get("win_pct_diff"), feats.get("pythag_diff"),
                         feats.get("run_diff_diff"), feats.get("rs_diff"),
                         feats.get("ra_diff"),       feats.get("home_advantage"),

@@ -42,36 +42,41 @@ _RESOLVED = ("Win", "Loss", "Push", "Cashout")
 
 # ── Storage ──────────────────────────────────────────────────────────────────
 
-def get_initial_balance() -> float | None:
-    """The starting bankroll the user entered once, or None if never set."""
+def get_initial_balance(user_id: int) -> float | None:
+    """The starting bankroll this user entered once, or None if never set (1.4)."""
     conn = get_connection()
     row = conn.execute(
-        "SELECT initial_balance FROM bankroll ORDER BY id LIMIT 1"
+        "SELECT initial_balance FROM bankroll WHERE user_id = ? ORDER BY id LIMIT 1",
+        (user_id,),
     ).fetchone()
     conn.close()
     return float(row["initial_balance"]) if row else None
 
 
-def set_initial_balance(amount: float) -> None:
+def set_initial_balance(amount: float, user_id: int) -> None:
     conn = get_connection()
-    conn.execute("INSERT INTO bankroll (initial_balance) VALUES (?)", (float(amount),))
+    conn.execute(
+        "INSERT INTO bankroll (initial_balance, user_id) VALUES (?, ?)",
+        (float(amount), user_id),
+    )
     conn.commit()
     conn.close()
 
 
-def get_balance_state() -> dict | None:
-    """{'initial', 'current', 'delta'} or None if no bankroll is set.
+def get_balance_state(user_id: int) -> dict | None:
+    """{'initial', 'current', 'delta'} for one user, or None if no bankroll set.
 
-    current = initial + realized real-bet P&L; delta = current − initial.
-    One round-trip: the starting bankroll and the resolved-bet P&L in a single
-    query, since this runs on every rerun of Today's Games.
+    current = initial + that user's realized real-bet P&L; delta = current −
+    initial. One round-trip: the starting bankroll and the resolved-bet P&L in a
+    single query, since this runs on every rerun of Today's Games.
     """
     conn = get_connection()
     row = conn.execute(
         "SELECT b.initial_balance AS initial, "
-        "COALESCE((SELECT SUM(profit_loss) FROM bets WHERE outcome IN (?, ?, ?, ?)), 0) AS pnl "
-        "FROM bankroll b ORDER BY b.id LIMIT 1",
-        _RESOLVED,
+        "COALESCE((SELECT SUM(profit_loss) FROM bets "
+        "          WHERE outcome IN (?, ?, ?, ?) AND user_id = ?), 0) AS pnl "
+        "FROM bankroll b WHERE b.user_id = ? ORDER BY b.id LIMIT 1",
+        (*_RESOLVED, user_id, user_id),
     ).fetchone()
     conn.close()
     if not row:
@@ -84,23 +89,27 @@ def get_balance_state() -> dict | None:
 # ── Startup gate + prompt ────────────────────────────────────────────────────
 
 def require_balance() -> None:
-    """Block the page until a bankroll exists. No-op (no query) once known set.
+    """Block the page until the logged-in user has a bankroll. No-op (no query)
+    once known set this session.
 
-    Call right after init_theme() on the entry pages. The first page load of a
-    session does one tiny indexed read; every call after is a dict lookup, so a
-    user who already has a bankroll pays nothing on subsequent navigations.
+    Call right after require_login() on the entry pages. The first page load
+    does one tiny indexed read; every call after is a dict lookup, so a user who
+    already has a bankroll pays nothing on subsequent navigations. The flag is
+    cleared on login (auth._login), so each user is gated on their own balance.
     """
     import streamlit as st
-    if st.session_state.get("_bankroll_ok"):
+    from auth import current_user_id
+    uid = current_user_id()
+    if uid is None or st.session_state.get("_bankroll_ok"):
         return
-    if get_initial_balance() is not None:
+    if get_initial_balance(uid) is not None:
         st.session_state["_bankroll_ok"] = True
         return
-    _render_prompt()
+    _render_prompt(uid)
     st.stop()
 
 
-def _render_prompt() -> None:
+def _render_prompt(user_id: int) -> None:
     """One-time, theme-matched bankroll setup card. Centered; gates the app."""
     import streamlit as st
     from theme import palette
@@ -128,7 +137,7 @@ def _render_prompt() -> None:
             )
         if submitted:
             if amount > 0:
-                set_initial_balance(amount)
+                set_initial_balance(amount, user_id)
                 st.session_state["_bankroll_ok"] = True
                 st.rerun()
             else:
