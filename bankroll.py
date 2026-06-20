@@ -79,7 +79,9 @@ def get_balance_state(user_id: int) -> dict | None:
         (*_RESOLVED, user_id, user_id),
     ).fetchone()
     conn.close()
-    if not row:
+    # No bankroll row for this user (e.g. a brand-new member) → no state, not a
+    # crash. Callers treat None as "not set yet" and skip the balance card.
+    if not row or row["initial"] is None:
         return None
     initial = float(row["initial"])
     delta = float(row["pnl"] or 0.0)
@@ -100,10 +102,13 @@ def require_balance() -> None:
     import streamlit as st
     from auth import current_user_id
     uid = current_user_id()
-    if uid is None or st.session_state.get("_bankroll_ok"):
+    # Cache the OK flag against the user id, not a bare bool — a returning user
+    # pays no DB cost, but a *different* user is always re-checked against their
+    # own bankroll row (so a new member can't inherit another user's "set" state).
+    if uid is None or st.session_state.get("_bankroll_ok") == uid:
         return
     if get_initial_balance(uid) is not None:
-        st.session_state["_bankroll_ok"] = True
+        st.session_state["_bankroll_ok"] = uid
         return
     _render_prompt(uid)
     st.stop()
@@ -138,7 +143,7 @@ def _render_prompt(user_id: int) -> None:
         if submitted:
             if amount > 0:
                 set_initial_balance(amount, user_id)
-                st.session_state["_bankroll_ok"] = True
+                st.session_state["_bankroll_ok"] = user_id
                 st.rerun()
             else:
                 st.error("Enter your bankroll to continue — it must be more than $0.")
