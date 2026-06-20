@@ -79,7 +79,7 @@ bets_raw = pd.read_sql(
 conn.close()
 
 if bets_raw.empty:
-    st.info("No bets logged yet. Use the form above to start tracking.")
+    st.info("No bets logged yet. Add bets from the **Today's Games** bet slip, or use **➕ Log a New Bet** above to enter one by hand.")
     st.stop()
 
 # --- Delete a Bet ---

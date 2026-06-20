@@ -8,7 +8,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 import streamlit as st
 from database import init_db
 from theme import init_theme, palette
-from auth import require_login
+from auth import require_login, is_admin
 
 init_db()
 
@@ -180,6 +180,20 @@ st.divider()
 
 st.subheader("Quick start")
 
+# Step 5 differs by role: only admins can retrain on Model Performance, so members
+# get a version that ends at resolving outcomes (their bets still feed the model).
+_step5 = {
+    "step": 5,
+    "title": "Resolve outcomes and retrain",
+    "body": "After games finish, go to <b>Bet Tracker</b> and resolve your bets. Once you have a few months of resolved data, visit <b>Model Performance</b> and click <b>Fetch 2026 Games &amp; Retrain</b> to improve the model.",
+    "tip": "Paper bets also feed model training — log them even if you're not betting real money yet.",
+} if is_admin() else {
+    "step": 5,
+    "title": "Resolve outcomes",
+    "body": "After games finish, go to <b>Bet Tracker</b> and resolve your bets — win, loss, or push. Your ROI, P&amp;L, and Closing Line Value update as they settle, and your resolved bets quietly feed the model's training in the background.",
+    "tip": "Paper bets also feed the model — log them even if you're not betting real money yet.",
+}
+
 render_steps(
     [
         {
@@ -204,12 +218,7 @@ render_steps(
             "title": "Log your bets",
             "body": "Open the Bet Slip in the sidebar. Set your stake for each bet, then click <b>Log Bets</b>. Your bets are saved to the Bet Tracker (or Paper Bet Tracker) with today's odds.",
         },
-        {
-            "step": 5,
-            "title": "Resolve outcomes and retrain",
-            "body": "After games finish, go to <b>Bet Tracker</b> and resolve your bets. Once you have a few months of resolved data, visit <b>Model Performance</b> and click <b>Fetch 2026 Games &amp; Retrain</b> to improve the model.",
-            "tip": "Paper bets also feed model training — log them even if you're not betting real money yet.",
-        },
+        _step5,
     ],
     title="Your daily workflow — 5 steps",
 )
