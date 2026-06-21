@@ -17,6 +17,7 @@ load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
 from database import get_connection, init_db
 from ingestion.odds_client import fetch_mlb_odds
 from ingestion.stats_scraper import get_full_team_stats
+from ingestion.pitcher_scraper import get_probable_pitchers_today, search_pitcher
 from models.predictor import MLBPredictor, build_matchup_features, evaluate_value
 from theme import init_theme, palette
 from ui import responsive_table
@@ -131,6 +132,37 @@ st.subheader("Today's Value Bets")
 def _load_odds_and_stats():
     return fetch_mlb_odds(), get_full_team_stats()
 
+@st.cache_data(ttl=1800, show_spinner=False)
+def _load_slate_pitchers(slate_iso: str, game_keys: tuple) -> dict:
+    """Probable starters + season stats per game (keyed by base_game_id) so the
+    Dashboard feeds the model the SAME pitcher-enhanced features as Games & Sizing.
+    Cached 30 min and parallelized — repeat dashboard hits in a session pay no
+    network cost. Returns Games & Sizing's `pitcher_data` shape so the two pages
+    can share one warmed copy. `game_keys` is a tuple of (base_game_id, home, away)."""
+    import concurrent.futures
+    probable = get_probable_pitchers_today(slate_iso)
+    name_for, names = {}, set()
+    for bid, home, away in game_keys:
+        hn, an = probable.get(home), probable.get(away)
+        name_for[bid] = (hn, an)
+        if hn: names.add(hn)
+        if an: names.add(an)
+    stats = {}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as ex:
+        futs = {ex.submit(search_pitcher, n): n for n in names}
+        for fut, n in futs.items():
+            try:    stats[n] = fut.result()
+            except Exception: stats[n] = None
+    return {
+        bid: {
+            "home":      stats.get(hn) if hn else None,
+            "away":      stats.get(an) if an else None,
+            "home_name": hn or "",
+            "away_name": an or "",
+        }
+        for bid, (hn, an) in name_for.items()
+    }
+
 def _is_upcoming_today(commence_time: str) -> bool:
     # Today's Puerto Rico slate (3 AM rollover), not yet started.
     return is_on_slate(commence_time, baseball_date()) and is_upcoming(commence_time)
@@ -157,10 +189,32 @@ else:
             if bid not in game_best or g["bookmaker_key"] == "caesars":
                 game_best[bid] = g
 
+        # Pitcher-enhanced features, same as Games & Sizing. Reuse pitcher data
+        # already warmed into session_state this session (by either page), fetch
+        # only the games it didn't cover (cached 30 min), then publish the merged
+        # result back so Games & Sizing reuses it too — a starter is looked up
+        # once per session regardless of which page the user opens first.
+        warmed = dict(st.session_state.get("pitcher_data") or {})
+        need = [(bid, g["home_team"], g["away_team"])
+                for bid, g in game_best.items() if bid not in warmed]
+        if need:
+            with st.spinner("Loading probable starters..."):
+                warmed.update(_load_slate_pitchers(baseball_date().isoformat(), tuple(need)))
+        st.session_state["pitcher_data"] = warmed
+        pitcher_for = warmed
+
         predictor = MLBPredictor()
         enriched  = []
+        n_pitcher_enhanced = 0
         for bid, g in game_best.items():
-            features  = build_matchup_features(g["home_team"], g["away_team"], stats_df, is_home_game=True)
+            entry = pitcher_for.get(bid) or {}
+            home_sp, away_sp = entry.get("home"), entry.get("away")
+            if home_sp and away_sp:
+                n_pitcher_enhanced += 1
+            features  = build_matchup_features(
+                g["home_team"], g["away_team"], stats_df, is_home_game=True,
+                home_pitcher=home_sp, away_pitcher=away_sp,
+            )
             home_prob = predictor.predict_proba(features)
             away_prob = 1 - home_prob
             home_eval = evaluate_value(home_prob, g["home_implied_prob"], g["home_ml"])
@@ -182,7 +236,10 @@ else:
         n_total = len(enriched)
         n_value = len(value_games)
 
-        st.caption(f"{n_total} game(s) today · **{n_value}** with 4%+ edge · Head to **Games & Sizing** for full detail and pitcher data")
+        _asof = now_pr().strftime("%b %d, %Y · %I:%M %p").replace(" 0", " ")
+        _pitch_note = f" · {n_pitcher_enhanced} pitcher-enhanced" if n_pitcher_enhanced else ""
+        st.caption(f"{n_total} game(s) today · **{n_value}** with 4%+ edge{_pitch_note} · Head to **Games & Sizing** for full detail")
+        st.caption(f"📍 Odds as of {_asof} (Puerto Rico) — lines can move before you place the bet.")
 
         if not value_games:
             st.info("No games cross the 4% edge threshold today.")
@@ -273,4 +330,4 @@ if n_pending > 0:
         disp_p.columns = ["Date", "Away", "Home", "Bet On", "Odds", "Stake ($)"]
         responsive_table(disp_p, key="home_pending_paper", numeric_cols=["Odds", "Stake ($)"])
 
-st.caption("⚠️ Model uses season-level stats only — pitcher data on the Games & Sizing page. Not financial advice. Gamble responsibly.")
+st.caption("⚠️ Model uses team season stats plus starting-pitcher data when starters are announced — matching the Games & Sizing page. Not financial advice. Gamble responsibly.")
