@@ -306,6 +306,19 @@ def init_db(force: bool = False):
         )
     """)
 
+    # Persistent login sessions: an opaque token (held in a browser cookie) maps
+    # to a user with a sliding 30-min expiry, so a page refresh restores the
+    # session instead of bouncing to the login screen (req 3.1). See auth.py.
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS sessions (
+            id SERIAL PRIMARY KEY,
+            token TEXT NOT NULL UNIQUE,
+            user_id INTEGER NOT NULL,
+            expires_at TIMESTAMPTZ NOT NULL,
+            created_at TEXT DEFAULT NOW()::TEXT
+        )
+    """)
+
     _migrate_pitcher_columns(conn)
     _migrate_last_ten_columns(conn)
     _migrate_user_id_columns(conn)

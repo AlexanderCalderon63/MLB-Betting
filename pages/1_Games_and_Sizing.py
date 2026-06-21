@@ -1,5 +1,9 @@
 """
-pages/1_Todays_Games.py — Live odds + model predictions + integrated bet slip
+pages/1_Games_and_Sizing.py — Live odds + model predictions + integrated bet slip.
+
+Defaults to today's Puerto Rico slate. A date picker lets you look ahead: future
+dates show only the scheduled matchups (live odds and pitcher lineups are fetched
+ONLY when the selected day is today — reqs 2.2–2.6.1).
 """
 
 import sys
@@ -23,21 +27,81 @@ from theme import init_theme, palette
 from bankroll import require_balance, get_balance_state, recommend_daily_budget, RISK_LEVELS, DEFAULT_RISK
 from auth import require_login, current_user_id
 from ingestion.park_weather import park_factor_badge, weather_badges, get_weather
+from tz import baseball_date, is_on_slate, is_upcoming, to_pr, game_slate_date
 
 init_db()
 
-st.set_page_config(page_title="Today's Games", page_icon="⚾", layout="wide")
-init_theme("#0e7490")   # cyan — today's games
+st.set_page_config(page_title="Games & Sizing", page_icon="⚾", layout="wide")
+init_theme("#0e7490")   # cyan — games & sizing
 c = palette()   # active theme colors — reused by inline HTML + helper functions
 require_login()     # gate on a valid session before anything loads
 require_balance()   # bankroll gates the budget recommendation below; no-op once set
 
-st.title("⚾ Today's MLB Games")
-st.caption("Live moneylines · Probable starters · Integrated bet slip")
+st.title("⚾ Games & Sizing")
+st.caption("Live moneylines · Probable starters · Integrated bet slip · Pick a date to preview ahead")
+
+# ── Future-date schedule preview (no live market yet) ──────────────────────────
+@st.cache_data(ttl=900)
+def _fetch_schedule(date_str: str) -> list[dict]:
+    """Matchups + start times for a date from the MLB schedule. No odds, no pitcher
+    stats — those don't exist until game day (req 2.6)."""
+    import requests
+    try:
+        r = requests.get("https://statsapi.mlb.com/api/v1/schedule",
+                         params={"sportId": 1, "date": date_str}, timeout=10)
+        r.raise_for_status()
+    except Exception:
+        return []
+    out = []
+    for d in r.json().get("dates", []):
+        for g in d.get("games", []):
+            t = g.get("teams", {})
+            out.append({
+                "away": t.get("away", {}).get("team", {}).get("name", "Away"),
+                "home": t.get("home", {}).get("team", {}).get("name", "Home"),
+                "gameDate": g.get("gameDate", ""),
+            })
+    return out
+
+
+def _render_schedule_preview(d) -> None:
+    st.info(
+        f"🗓️ **{d.strftime('%A, %B ')}{d.day}** is still ahead. Sportsbooks haven't posted "
+        "moneylines for these games yet, so there's nothing to price, size, or bet — the model "
+        "edges and bet slip light up on game day, once Caesars lines go live. Here's the scheduled "
+        "slate so you can plan ahead:"
+    )
+    games = _fetch_schedule(d.isoformat())
+    if not games:
+        st.warning("No games are on the MLB schedule for that date yet.")
+        return
+    games.sort(key=lambda g: g["gameDate"])
+    for g in games:
+        try:
+            clock = to_pr(g["gameDate"]).strftime("%I:%M %p").lstrip("0")
+        except Exception:
+            clock = "TBD"
+        st.markdown(
+            f'<div class="game-block">'
+            f'<div class="game-matchup">{g["away"]} <span class="game-at">@</span> {g["home"]}</div>'
+            f'<div class="game-meta">🕐 {clock}  ·  {d.strftime("%a %b ")}{d.day}</div>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+
 
 # ── Controls ───────────────────────────────────────────────────────────────────
-col_refresh, col_filter, col_tog1, col_tog2 = st.columns([1, 2, 1.5, 2])
-with col_refresh:
+slate = baseball_date()   # today's Puerto Rico slate (3 AM rollover)
+
+top_date, top_refresh = st.columns([2, 1])
+with top_date:
+    sel_date = st.date_input(
+        "Game day", value=slate, min_value=slate, max_value=slate + timedelta(days=30),
+        help="Defaults to today's Puerto Rico slate. Pick a future date to preview the schedule — "
+             "live odds, model edges, and the bet slip only appear on game day.",
+    )
+with top_refresh:
+    st.markdown("<div style='height:1.75rem;'></div>", unsafe_allow_html=True)
     if st.button("🔄 Refresh", use_container_width=True):
         st.cache_data.clear()
         for key in [k for k in st.session_state if k.startswith(("llm_", "insight_"))]:
@@ -46,6 +110,14 @@ with col_refresh:
                     "ai_recs", "ai_recs_error"]:
             st.session_state.pop(key, None)
         st.rerun()
+
+# Odds + pitcher lineups are fetched ONLY when the selected day is today (req 2.6.1).
+# Any other date shows the schedule preview and stops before any market call.
+if sel_date != slate:
+    _render_schedule_preview(sel_date)
+    st.stop()
+
+col_filter, col_tog1, col_tog2 = st.columns([2, 1.5, 2])
 with col_filter:
     filter_book = st.selectbox(
         "Filter by sportsbook",
@@ -55,7 +127,7 @@ with col_filter:
 with col_tog1:
     show_avoid = st.toggle("Show no-value games", value=False)
 with col_tog2:
-    show_all_times = st.toggle("Show started / other-day", value=False)
+    show_all_times = st.toggle("Show started games", value=False)
 
 st.divider()
 
@@ -78,33 +150,21 @@ if filter_book != "All Books":
         st.stop()
     odds_list = filtered
 
-# ── Filter: today only + not yet started ──────────────────────────────────────
-def _is_todays_upcoming_game(commence_time: str, grace_minutes: int = 5) -> bool:
-    try:
-        dt_utc = datetime.fromisoformat(commence_time.replace("Z", "+00:00"))
-        now_utc = datetime.now(timezone.utc)
-        if dt_utc <= now_utc - timedelta(minutes=grace_minutes):
-            return False
-        local_tz = datetime.now().astimezone().tzinfo
-        dt_local  = dt_utc.astimezone(local_tz)
-        now_local = datetime.now(local_tz)
-        today_start = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
-        today_end   = today_start + timedelta(hours=26)
-        return today_start <= dt_local < today_end
-    except Exception:
-        return True
-
+# ── Filter to today's PR slate (and, unless toggled, only not-yet-started) ────
 before_filter = len(set(g["base_game_id"] for g in odds_list))
-if not show_all_times:
-    odds_list = [g for g in odds_list if _is_todays_upcoming_game(g["commence_time"])]
+odds_list = [
+    g for g in odds_list
+    if is_on_slate(g["commence_time"], slate)
+    and (show_all_times or is_upcoming(g["commence_time"]))
+]
 after_filter = len(set(g["base_game_id"] for g in odds_list))
 skipped = before_filter - after_filter
 
-if skipped > 0 and not show_all_times:
-    st.caption(f"⏱️ {skipped} game(s) hidden — already started or scheduled for another day.")
+if skipped > 0:
+    st.caption(f"⏱️ {skipped} game(s) hidden — already started or not on today's slate.")
 
 if not odds_list:
-    st.warning("No upcoming games for today. Check back tomorrow morning when lines are posted.")
+    st.warning("No upcoming games for today. Check back later when lines are posted.")
     st.stop()
 
 # Deduplicate to one entry per base game (prefer Caesars)
@@ -184,7 +244,7 @@ def _warm_game_data(games: list, probable: dict, wx_key: str | None) -> tuple[di
         }
     return pitcher_data, h2h, weather
 
-today_str = datetime.now().strftime("%Y-%m-%d")
+today_str = slate.isoformat()
 probable  = load_probable_pitchers(today_str)
 
 # Warm pitcher/H2H/weather data once per slate (re-runs only if the games change
@@ -1180,14 +1240,12 @@ for base_id, entries in sorted_games:
     signal_cls = game_signal_class(best_edge)
 
     try:
-        dt = datetime.fromisoformat(sample["commence_time"].replace("Z", "+00:00"))
-        et_offset = timedelta(hours=-4)
-        dt_et     = dt + et_offset
-        today_et  = (datetime.now(timezone.utc) + et_offset).date()
-        if dt_et.date() == today_et:
-            time_str = dt_et.strftime("%I:%M %p ET").lstrip("0") + "  ·  Today"
+        dt_pr = to_pr(sample["commence_time"])
+        clock = dt_pr.strftime("%I:%M %p").lstrip("0")
+        if game_slate_date(sample["commence_time"]) == slate:
+            time_str = clock + "  ·  Today"
         else:
-            time_str = dt_et.strftime("%I:%M %p ET").lstrip("0") + "  ·  " + dt_et.strftime("%a %b %-d")
+            time_str = clock + "  ·  " + dt_pr.strftime("%a %b ") + str(dt_pr.day)
     except Exception:
         time_str = ""
 
@@ -1524,7 +1582,7 @@ with st.sidebar:
                          sp_era_diff, sp_whip_diff, sp_k9_diff, sp_bb9_diff)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
-                    str(date.today()),
+                    slate.isoformat(),
                     g["home_team"], g["away_team"], rc["team"],
                     int(rc["odds"]), rc["stake"], rc["model_prob"], rc["impl_prob"],
                     f"Via {rc['bookmaker']} · Edge: {rc['edge']*100:+.1f}%",
@@ -1639,7 +1697,7 @@ with st.sidebar:
                             sp_era_diff, sp_whip_diff, sp_k9_diff, sp_bb9_diff
                         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """, (
-                        str(date.today()),
+                        slate.isoformat(),
                         item["g"]["home_team"], item["g"]["away_team"],
                         item["rec_team"], int(item["rec_odds"]),
                         item["stake"], item["model_p"], item["impl_p"],

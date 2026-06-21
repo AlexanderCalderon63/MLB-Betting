@@ -15,6 +15,7 @@ from theme import init_theme, palette
 from ui import responsive_chart, responsive_table
 from bet_analytics import roi_breakdown, signal_tier, calibration, TIER_ORDER
 from auth import require_login, selected_user_id, current_user_id, user_clause, owner_clause
+from tz import baseball_date
 
 init_db()
 
@@ -33,7 +34,7 @@ _c = palette()
 st.markdown(f"""
 <div style="background:{_c['surface2']}; border:1px solid {_c['border']}; border-radius:10px;
             padding:0.9rem 1.2rem; margin-bottom:1.2rem; font-size:0.875rem; color:{_c['text2']};">
-    💡 Paper bets you add from the <strong>Today's Games</strong> bet slip carry the model's feature data, so
+    💡 Paper bets you add from the <strong>Games &amp; Sizing</strong> bet slip carry the model's feature data, so
     their outcomes sharpen future predictions once you resolve them here. Bets you log by hand below are tracked
     but don't feed model training.
 </div>
@@ -44,7 +45,7 @@ st.markdown(f"""
 with st.expander("➕ Log a New Paper Bet", expanded=False):
     with st.form("new_paper_bet"):
         fc1, fc2 = st.columns(2)
-        game_date    = fc1.date_input("Game Date", value=date.today())
+        game_date    = fc1.date_input("Game Date", value=baseball_date())
         home_team    = fc1.text_input("Home Team")
         away_team    = fc1.text_input("Away Team")
         home_label   = home_team.strip() if home_team.strip() else "Home Team"
@@ -79,7 +80,7 @@ bets_raw = pd.read_sql(
 conn.close()
 
 if bets_raw.empty:
-    st.info("No paper bets logged yet. Add them from the **Today's Games** bet slip to cover the whole slate at once, or use **➕ Log a New Paper Bet** above.")
+    st.info("No paper bets logged yet. Add them from the **Games & Sizing** bet slip to cover the whole slate at once, or use **➕ Log a New Paper Bet** above.")
     st.stop()
 
 # --- Delete a Paper Bet ---
@@ -114,8 +115,8 @@ with st.expander("📥 Refresh Closing Odds", expanded=False):
         "Fetches closing odds for all MLB games on selected date(s) and stores them locally. "
         "Run this before auto-resolving bets — subsequent resolves use the cache with no extra API calls."
     )
-    from datetime import date as _date, timedelta as _td
-    yesterday = _date.today() - _td(days=1)
+    from datetime import timedelta as _td
+    yesterday = baseball_date() - _td(days=1)
     rc1, rc2 = st.columns(2)
     rc_start = rc1.date_input("From date", value=yesterday, key="prc_start")
     rc_end   = rc2.date_input("To date",   value=yesterday, key="prc_end")
@@ -329,13 +330,13 @@ if not completed.empty:
     <div style="font-size:0.72rem; color:{_c['muted']}; font-weight:600; text-transform:uppercase; letter-spacing:0.07em; margin-bottom:6px;">Avg CLV ⓘ</div>
     <div style="font-size:2rem; font-weight:800; font-family:'Manrope',sans-serif; color:{clv_color};">{avg_clv:+.2f}%</div>
   </div>
-  <div class="stat-box" style="flex:1; min-width:130px;" title="Completed paper bets with feature data logged from the Today's Games bet slip — these feed model training on next retrain.">
+  <div class="stat-box" style="flex:1; min-width:130px;" title="Completed paper bets with feature data logged from the Games & Sizing bet slip — these feed model training on next retrain.">
     <div style="font-size:0.72rem; color:{_c['muted']}; font-weight:600; text-transform:uppercase; letter-spacing:0.07em; margin-bottom:6px;">Training Ready ⓘ</div>
     <div style="font-size:2rem; font-weight:800; font-family:'Manrope',sans-serif; color:{_c['accent']};">{training_ready}</div>
   </div>
 </div>
 <div style="font-size:0.78rem; color:{_c['muted']}; margin-bottom:1.5rem;">
-    {has_features} of {len(bets_raw)} total paper bets include feature data from the Today's Games bet slip (model training eligible once outcomes are saved).
+    {has_features} of {len(bets_raw)} total paper bets include feature data from the Games & Sizing bet slip (model training eligible once outcomes are saved).
 </div>
 """, unsafe_allow_html=True)
 

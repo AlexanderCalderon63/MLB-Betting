@@ -17,6 +17,7 @@ from ui import responsive_chart, responsive_table
 from bankroll import require_balance, get_balance_state, render_balance_card
 from bet_analytics import roi_breakdown, signal_tier, calibration, TIER_ORDER
 from auth import require_login, selected_user_id, current_user_id, user_clause, owner_clause
+from tz import baseball_date
 
 init_db()
 
@@ -43,7 +44,7 @@ if _bal:
 with st.expander("➕ Log a New Bet", expanded=False):
     with st.form("new_bet"):
         fc1, fc2 = st.columns(2)
-        game_date = fc1.date_input("Game Date", value=date.today())
+        game_date = fc1.date_input("Game Date", value=baseball_date())
         home_team = fc1.text_input("Home Team")
         away_team = fc1.text_input("Away Team")
         # Build team options dynamically so the label shows the actual team name
@@ -79,7 +80,7 @@ bets_raw = pd.read_sql(
 conn.close()
 
 if bets_raw.empty:
-    st.info("No bets logged yet. Add bets from the **Today's Games** bet slip, or use **➕ Log a New Bet** above to enter one by hand.")
+    st.info("No bets logged yet. Add bets from the **Games & Sizing** bet slip, or use **➕ Log a New Bet** above to enter one by hand.")
     st.stop()
 
 # --- Delete a Bet ---
@@ -114,8 +115,8 @@ with st.expander("📥 Refresh Closing Odds", expanded=False):
         "Fetches closing odds for all MLB games on selected date(s) and stores them locally. "
         "Run this before auto-resolving bets — subsequent resolves use the cache with no extra API calls."
     )
-    from datetime import date as _date, timedelta as _td
-    yesterday = _date.today() - _td(days=1)
+    from datetime import timedelta as _td
+    yesterday = baseball_date() - _td(days=1)
     rc1, rc2 = st.columns(2)
     rc_start = rc1.date_input("From date", value=yesterday, key="rc_start")
     rc_end   = rc2.date_input("To date",   value=yesterday, key="rc_end")

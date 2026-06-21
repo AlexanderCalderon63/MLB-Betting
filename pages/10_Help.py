@@ -142,7 +142,8 @@ render_steps(
             "step": 2,
             "title": "Sign in",
             "body": "Enter your username and password on the <b>Sign in</b> tab. Your session stays active as you move "
-                    "between pages.",
+                    "between pages — and now survives a browser refresh, so reloading the tab no longer kicks you back "
+                    "to the login screen.",
         },
         {
             "step": 3,
@@ -154,7 +155,7 @@ render_steps(
             "step": 4,
             "title": "Sign out",
             "body": "Use <b>Sign out</b> in the sidebar whenever you're done. For safety, you're also signed out "
-                    "automatically after 10 minutes of inactivity.",
+                    "automatically after 30 minutes of inactivity.",
         },
     ],
     title="Getting into the app",
@@ -198,9 +199,9 @@ render_steps(
     [
         {
             "step": 1,
-            "title": "Open Today's Games and refresh odds",
-            "body": "Navigate to <b>Today's Games</b> in the sidebar. Click <b>Refresh Odds</b> to pull the latest Caesars moneylines. This also loads team stats and any probable pitchers already announced.",
-            "tip": "Do this after 10 AM ET — lines are usually posted by then and probable pitchers start appearing.",
+            "title": "Open Games & Sizing and refresh odds",
+            "body": "Navigate to <b>Games &amp; Sizing</b> in the sidebar. It opens on today's slate (your Puerto Rico time) and pulls the latest Caesars moneylines, team stats, and any probable pitchers. Use the <b>Game day</b> date picker to peek at a future day's schedule — odds and pitcher data only appear once that day arrives.",
+            "tip": "Do this after 10 AM AST — lines are usually posted by then and probable pitchers start appearing.",
         },
         {
             "step": 2,
@@ -238,8 +239,8 @@ render_feature_grid([
     },
     {
         "icon": "⚾",
-        "name": "Today's Games",
-        "desc": "Full odds table with model probabilities, pitcher context, park factors, and the Bet Slip. Main daily workflow.",
+        "name": "Games & Sizing",
+        "desc": "Full odds table with model probabilities, pitcher context, park factors, and the Bet Slip. Pick a date to preview a future day's schedule. Main daily workflow.",
     },
     {
         "icon": "📊",
@@ -317,7 +318,7 @@ render_callout(
     "Bankroll &amp; Recommended Budget",
     "Your bankroll is the total you've set aside for betting — you enter it once the first time you open the app. "
     "The Bet Tracker shows it growing or shrinking as your real bets settle: green with a + when you're up since you started, "
-    "red with a − when you're below it. On Today's Games, the app reads your current bankroll and the day's value bets and "
+    "red with a − when you're below it. On Games & Sizing, the app reads your current bankroll and the day's value bets and "
     "auto-fills a suggested daily budget for your Real bet slip, sized with the Kelly formula and your chosen risk level.",
     "Only real bets move your bankroll — paper bets never touch it.",
 )
@@ -353,7 +354,7 @@ render_callout(
 
 render_callout(
     "Bet Slip",
-    "The staging cart in the sidebar on Today's Games. Add bets here from game cards, set your stake, "
+    "The staging cart in the sidebar on Games & Sizing. Add bets here from game cards, set your stake, "
     "and click Log Bets to save them. The slip clears after logging.",
 )
 
@@ -375,7 +376,7 @@ with st.expander("Show tips", expanded=False):
     tips = [
         (
             "Add probable pitchers before reading signals",
-            "The model defaults to season-level team stats only. On Today's Games, open the pitcher panel "
+            "The model defaults to season-level team stats only. On Games & Sizing, open the pitcher panel "
             "and enter the probable starters — ERA, WHIP, K/9 differences can swing the edge estimate by several points. "
             "Always do this before deciding whether a game is worth betting.",
         ),
@@ -397,7 +398,7 @@ with st.expander("Show tips", expanded=False):
         ),
         (
             "Refresh odds after lineup changes or weather delays",
-            "Lines move when pitchers are scratched or weather affects the game. Re-open Today's Games and "
+            "Lines move when pitchers are scratched or weather affects the game. Re-open Games & Sizing and "
             "click Refresh Odds to pull updated lines and re-run the model before placing a bet.",
         ),
         (
@@ -406,8 +407,16 @@ with st.expander("Show tips", expanded=False):
             "All odds, CLV, and edge calculations are relative to Caesars lines.",
         ),
         (
+            "Everything runs on Puerto Rico time",
+            "\"Today\" follows your local Puerto Rico clock, and a day's slate doesn't roll over until 3 AM — so a "
+            "late game that starts at 11 PM and ends after midnight still counts as that day's game on Games & Sizing "
+            "and Live Scores. The Dashboard always shows today's value bets only; to look ahead, use the date picker on "
+            "Games & Sizing. Future dates show just the scheduled matchups — sportsbooks haven't priced them yet, so "
+            "there are no odds or model edges until that day arrives.",
+        ),
+        (
             "Set your bankroll once, then let the app size your daily budget",
-            "The first time you open the app you'll enter your betting bankroll. After that, Today's Games auto-fills a "
+            "The first time you open the app you'll enter your betting bankroll. After that, Games & Sizing auto-fills a "
             "suggested daily budget for your Real bet slip from your current bankroll, the day's value bets, and your "
             "risk level — then splits it across your picks. Nudge the Conservative / Moderate / Aggressive selector to "
             "bet more or less, and remember only real bets change your bankroll.",

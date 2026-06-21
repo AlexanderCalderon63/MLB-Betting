@@ -11,6 +11,7 @@ from datetime import datetime, timezone, timedelta
 from database import get_connection, init_db
 from theme import init_theme, palette
 from auth import require_login, selected_user_id, user_clause
+from tz import baseball_date, now_pr
 
 init_db()
 
@@ -35,7 +36,7 @@ with col_btn:
 with col_toggle:
     show_all = st.toggle("Show all today's games", value=False)
 with col_time:
-    st.caption(f"Last loaded: {datetime.now().strftime('%I:%M:%S %p')}")
+    st.caption(f"Last loaded: {now_pr().strftime('%I:%M:%S %p')}")
 
 if do_refresh:
     st.cache_data.clear()
@@ -258,7 +259,9 @@ def _probable_pitcher(game: dict, side: str) -> str:
 
 
 # ── Main ───────────────────────────────────────────────────────────────────────
-today_str = datetime.now().strftime("%Y-%m-%d")
+# Today's Puerto Rico slate (3 AM rollover) — so a game that ran past midnight, or
+# a late-night bet still in progress, stays on "today" until 3 AM (req 2.7/2.8).
+today_str = baseball_date().isoformat()
 
 with st.spinner("Loading today's schedule..."):
     games    = fetch_todays_schedule(today_str)
