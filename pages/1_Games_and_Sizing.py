@@ -195,18 +195,27 @@ def _weather_key() -> str | None:
     except Exception:
         return None
 
-def _warm_game_data(games: list, probable: dict, wx_key: str | None) -> tuple[dict, dict, dict]:
+def _warm_game_data(games: list, probable: dict, wx_key: str | None,
+                    existing: dict | None = None) -> tuple[dict, dict, dict]:
     """Fetch pitcher stats, head-to-head history, and weather for every game
     concurrently. A single thread pool across all three call types collapses
-    what used to be ~30s of sequential MLB API calls into a few seconds."""
+    what used to be ~30s of sequential MLB API calls into a few seconds.
+
+    `existing` carries pitcher data already loaded this session (e.g. by the
+    Dashboard) keyed by base_game_id — those games are reused as-is and skip the
+    pitcher fetch, so the two pages never look the same starter up twice."""
     import concurrent.futures
 
+    existing = existing or {}
     name_for: dict = {}
     pitcher_names: set = set()
     for g in games:
+        bid = g["base_game_id"]
         hn = probable.get(g["home_team"])
         an = probable.get(g["away_team"])
-        name_for[g["base_game_id"]] = (hn, an)
+        name_for[bid] = (hn, an)
+        if bid in existing:        # already loaded elsewhere — don't refetch its starters
+            continue
         if hn: pitcher_names.add(hn)
         if an: pitcher_names.add(an)
 
@@ -235,6 +244,9 @@ def _warm_game_data(games: list, probable: dict, wx_key: str | None) -> tuple[di
     pitcher_data: dict = {}
     for g in games:
         bid = g["base_game_id"]
+        if bid in existing:           # reuse Dashboard-loaded starters verbatim
+            pitcher_data[bid] = existing[bid]
+            continue
         hn, an = name_for[bid]
         pitcher_data[bid] = {
             "home":      pstats.get(hn) if hn else None,
@@ -252,7 +264,8 @@ probable  = load_probable_pitchers(today_str)
 _warm_sig = tuple(sorted(g["base_game_id"] for g in unique_games))
 if st.session_state.get("_warm_sig") != _warm_sig:
     with st.spinner("Loading probable starters, matchups & weather..."):
-        _pd, _h2h, _wx = _warm_game_data(unique_games, probable, _weather_key())
+        _pd, _h2h, _wx = _warm_game_data(unique_games, probable, _weather_key(),
+                                         existing=st.session_state.get("pitcher_data"))
     st.session_state["pitcher_data"] = _pd
     st.session_state["h2h_data"]     = _h2h
     st.session_state["weather_data"] = _wx
