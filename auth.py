@@ -33,11 +33,18 @@ import hashlib
 import hmac
 import os
 import re
+import secrets
 import time
+from datetime import datetime, timedelta, timezone
 
 from database import get_connection
 
-IDLE_SECONDS = 600           # auto-logout after 10 min of inactivity (1.1.2.1)
+IDLE_SECONDS = 1800          # auto-logout after 30 min of inactivity (req 3)
+COOKIE_NAME = "mlb_session"  # holds an opaque, server-validated token (req 3.1)
+_COOKIE_MAX_AGE = 12 * 3600  # cookie just transports the token; the DB row's sliding
+                             # 30-min expiry is the real idle clock, so the cookie
+                             # never needs per-rerun rewrites (which would flicker)
+_DB_TOUCH_SECONDS = 60       # throttle: extend the DB session expiry at most once/min
 _PBKDF2_ROUNDS = 200_000     # stdlib pbkdf2; tune up over time, the tag stores it
 
 
@@ -159,6 +166,157 @@ def reset_password(username: str, answer: str, new_password: str) -> bool:
     return True
 
 
+# ── Persistent sessions (DB-backed token, held in a browser cookie) ──────────
+# Streamlit wipes session_state on a hard refresh, so without this a refresh
+# bounced the user to the login screen (req 3.1). The cookie carries only a
+# random token; identity + the sliding 30-min idle expiry live server-side.
+
+def create_session(user_id: int) -> str:
+    token = secrets.token_urlsafe(32)
+    now = datetime.now(timezone.utc)
+    conn = get_connection()
+    conn.execute("DELETE FROM sessions WHERE expires_at < ?", (now,))   # opportunistic GC
+    conn.execute(
+        "INSERT INTO sessions (token, user_id, expires_at) VALUES (?, ?, ?)",
+        (token, user_id, now + timedelta(seconds=IDLE_SECONDS)),
+    )
+    conn.commit()
+    conn.close()
+    return token
+
+
+def validate_session(token: str | None) -> int | None:
+    """Return the user id for a live (non-expired) token, else None."""
+    if not token:
+        return None
+    conn = get_connection()
+    row = conn.execute(
+        "SELECT user_id FROM sessions WHERE token = ? AND expires_at > ?",
+        (token, datetime.now(timezone.utc)),
+    ).fetchone()
+    conn.close()
+    return row["user_id"] if row else None
+
+
+def touch_session(token: str | None) -> None:
+    """Slide the idle expiry forward — called (throttled) while the user is active."""
+    if not token:
+        return
+    conn = get_connection()
+    conn.execute(
+        "UPDATE sessions SET expires_at = ? WHERE token = ?",
+        (datetime.now(timezone.utc) + timedelta(seconds=IDLE_SECONDS), token),
+    )
+    conn.commit()
+    conn.close()
+
+
+def destroy_session(token: str | None) -> None:
+    if not token:
+        return
+    conn = get_connection()
+    conn.execute("DELETE FROM sessions WHERE token = ?", (token,))
+    conn.commit()
+    conn.close()
+
+
+def _user_by_id(uid: int) -> dict | None:
+    conn = get_connection()
+    row = conn.execute("SELECT * FROM users WHERE id = ?", (uid,)).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def _cookie_manager():
+    """One cookie bridge per browser session. Returns None if the component isn't
+    installed (e.g. local pure-logic runs) — auth then works in-session only."""
+    import streamlit as st
+    if "_cookie_mgr" not in st.session_state:
+        try:
+            import extra_streamlit_components as stx
+            st.session_state["_cookie_mgr"] = stx.CookieManager(key="mlb_auth_cookie_mgr")
+        except Exception:
+            st.session_state["_cookie_mgr"] = None
+    return st.session_state["_cookie_mgr"]
+
+
+def _set_cookie(token: str) -> None:
+    cm = _cookie_manager()
+    if cm is None:
+        return
+    try:
+        cm.set(COOKIE_NAME, token,
+               expires_at=datetime.now(timezone.utc) + timedelta(seconds=_COOKIE_MAX_AGE))
+    except Exception:
+        pass
+
+
+def _clear_cookie() -> None:
+    cm = _cookie_manager()
+    if cm is None:
+        return
+    try:
+        cm.delete(COOKIE_NAME)
+    except Exception:
+        pass
+
+
+def _restore_from_cookie() -> int | None:
+    """Rebuild the session from the cookie token after a refresh. Returns the user
+    id on success. The cookie component loads a beat after the script starts, so on
+    the first run its value is None — wait one rerun rather than flashing the login
+    screen (the component triggers that rerun itself once it has the cookie)."""
+    import streamlit as st
+    cm = _cookie_manager()
+    if cm is None:
+        return None
+    token = (cm.get_all() or {}).get(COOKIE_NAME)
+    if not token:
+        # CookieManager returns {} synchronously, then reruns with the real cookies
+        # once its iframe mounts. Wait exactly one rerun before concluding there's no
+        # session, so a refresh restores silently instead of flashing the login screen.
+        if not st.session_state.get("_cookie_probed"):
+            st.session_state["_cookie_probed"] = True
+            st.stop()
+        return None
+    st.session_state["_cookie_probed"] = True
+    uid = validate_session(token)
+    u = _user_by_id(uid) if uid else None
+    if not u:
+        return None
+    st.session_state["_auth_user"] = {
+        "id": u["id"], "username": u["username"], "role": u["role"], "email": u.get("email"),
+    }
+    st.session_state["_auth_token"] = token
+    st.session_state["_auth_last_active"] = time.time()
+    st.session_state["_last_db_touch"] = time.time()
+    touch_session(token)
+    return uid
+
+
+def _keep_session_alive() -> None:
+    """Slide the DB expiry forward while active, at most once/min (perf: no DB on
+    most reruns). The cookie's own 12 h life means it never needs rewriting here."""
+    import streamlit as st
+    token = st.session_state.get("_auth_token")
+    if not token:
+        return
+    now = time.time()
+    if now - st.session_state.get("_last_db_touch", 0) > _DB_TOUCH_SECONDS:
+        touch_session(token)
+        st.session_state["_last_db_touch"] = now
+
+
+def _flush_pending_cookie() -> None:
+    """Write the just-minted login cookie during a normal authenticated render —
+    NOT right before a manual st.rerun() (which races the cookie component before
+    it persists). Runs once after login; the cookie then survives refreshes."""
+    import streamlit as st
+    token = st.session_state.pop("_cookie_pending", None)
+    if token:
+        _set_cookie(token)
+
+
 # ── Per-user data scoping ─────────────────────────────────────────────────────
 
 def user_clause(uid: int | None, *, has_where: bool = False) -> tuple[str, tuple]:
@@ -201,14 +359,30 @@ def _login(u: dict) -> None:
         "id": u["id"], "username": u["username"], "role": u["role"], "email": u.get("email"),
     }
     st.session_state["_auth_last_active"] = time.time()
+    # Persist across refreshes: mint a server-side token and drop it in a cookie.
+    # Best-effort — if persistence is unavailable the in-session login still works.
+    try:
+        token = create_session(u["id"])
+        st.session_state["_auth_token"] = token
+        st.session_state["_last_db_touch"] = time.time()
+        # Defer the cookie write to the next (authenticated) render. Writing it here
+        # and immediately st.rerun()-ing (which the login forms do) races the cookie
+        # component before it can persist to the browser — the #1 cause of "refresh
+        # logs me out". _flush_pending_cookie() writes it during a normal render.
+        st.session_state["_cookie_pending"] = token
+    except Exception as e:
+        print(f"[AUTH] session persistence unavailable: {e}")
     # Force a fresh per-user bankroll check on next page (balance is per user, 1.4).
-    for k in ("_bankroll_ok", "_admin_filter_uid"):
+    for k in ("_bankroll_ok", "_admin_filter_uid", "_auth_expired", "_cookie_probed"):
         st.session_state.pop(k, None)
 
 
 def logout() -> None:
     import streamlit as st
-    for k in ("_auth_user", "_auth_last_active", "_bankroll_ok", "_admin_filter_uid"):
+    destroy_session(st.session_state.get("_auth_token"))
+    _clear_cookie()
+    for k in ("_auth_user", "_auth_last_active", "_auth_token", "_last_db_touch",
+              "_bankroll_ok", "_admin_filter_uid", "_cookie_probed", "_cookie_pending"):
         st.session_state.pop(k, None)
     st.rerun()
 
@@ -216,25 +390,34 @@ def logout() -> None:
 # ── The gate ──────────────────────────────────────────────────────────────────
 
 def require_login() -> None:
-    """Block the page until signed in; enforce the 10-min idle timeout.
+    """Block the page until signed in; enforce the 30-min idle timeout.
 
     Call right after init_theme() on every page. Logged in and active → returns
-    after a session_state read (plus the cheap sidebar account card + role CSS).
-    Idle too long, or not signed in → renders the auth screen and st.stop()s.
+    after a session_state read (plus a throttled token refresh and the cheap
+    sidebar account card). After a refresh (session_state empty) it restores the
+    session from the cookie token. Idle too long, or no valid token → auth screen.
     """
     import streamlit as st
     u = st.session_state.get("_auth_user")
     now = time.time()
     if u:
         if now - st.session_state.get("_auth_last_active", now) > IDLE_SECONDS:
-            for k in ("_auth_user", "_auth_last_active", "_bankroll_ok", "_admin_filter_uid"):
+            destroy_session(st.session_state.get("_auth_token"))
+            for k in ("_auth_user", "_auth_last_active", "_auth_token", "_last_db_touch",
+                      "_bankroll_ok", "_admin_filter_uid", "_cookie_pending"):
                 st.session_state.pop(k, None)
             st.session_state["_auth_expired"] = True
         else:
             st.session_state["_auth_last_active"] = now
+            _keep_session_alive()
+            _flush_pending_cookie()
             _render_account_sidebar()
             _hide_admin_pages()
             return
+    elif _restore_from_cookie():
+        _render_account_sidebar()
+        _hide_admin_pages()
+        return
     _render_auth_screen()
     st.stop()
 
@@ -299,7 +482,7 @@ def _render_auth_screen() -> None:
     _, mid, _ = st.columns([1, 1.5, 1])
     with mid:
         if st.session_state.pop("_auth_expired", False):
-            st.info("⏱️ Signed out after 10 minutes of inactivity. Sign in to pick up where you left off.")
+            st.info("⏱️ Signed out after 30 minutes of inactivity. Sign in to pick up where you left off.")
 
         eyebrow = "Set up · Admin account" if bootstrap else "⚾ MLB Value Finder"
         title = "Create the admin account" if bootstrap else "Welcome back."

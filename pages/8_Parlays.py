@@ -29,6 +29,7 @@ from database import init_db, get_connection
 from theme import init_theme, palette
 from ui import responsive_chart
 from auth import require_login, selected_user_id, current_user_id, user_clause, owner_clause
+from tz import baseball_date, is_on_slate, is_upcoming, now_pr
 
 init_db()
 
@@ -71,19 +72,9 @@ def game_time_str(ct: str) -> str:
     except Exception:
         return ""
 
-def _is_upcoming_today(ct: str, grace: int = 5) -> bool:
-    try:
-        dt_utc  = datetime.fromisoformat(ct.replace("Z", "+00:00"))
-        now_utc = datetime.now(timezone.utc)
-        if dt_utc <= now_utc - timedelta(minutes=grace):
-            return False
-        local_tz    = datetime.now().astimezone().tzinfo
-        dt_local    = dt_utc.astimezone(local_tz)
-        now_local   = datetime.now(local_tz)
-        today_start = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
-        return today_start <= dt_local < today_start + timedelta(hours=26)
-    except Exception:
-        return True
+def _is_upcoming_today(ct: str) -> bool:
+    # Today's Puerto Rico slate (3 AM rollover), not yet started.
+    return is_on_slate(ct, baseball_date()) and is_upcoming(ct)
 
 
 # ── Cached build data (odds + stats + model predictions in one pass) ────────────
@@ -150,7 +141,7 @@ def _log_parlay(book, budget, legs, p_american, net, notes) -> None:
     cur = conn.execute(
         "INSERT INTO parlays (created_date, sportsbook, stake, legs_count, parlay_odds, potential_payout, notes, user_id) "
         "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        (str(date.today()), book, budget, len(legs), p_american, net, notes, current_user_id()),
+        (baseball_date().isoformat(), book, budget, len(legs), p_american, net, notes, current_user_id()),
     )
     parlay_id = cur.lastrowid
     for leg in legs:
@@ -252,7 +243,7 @@ def render_build() -> None:
     if len(all_games) < 2:
         st.info(
             "Only one upcoming game is on the board — a parlay needs at least two legs. "
-            "Check back when more games post, or place a single bet on **Today's Games**."
+            "Check back when more games post, or place a single bet on **Games & Sizing**."
         )
         return
 
@@ -696,7 +687,8 @@ def render_track(uid) -> None:
 
 # ── Page layout ───────────────────────────────────────────────────────────────
 
-_today_str = datetime.now().strftime("%A, %b %-d") if os.name != "nt" else datetime.now().strftime("%A, %b %#d")
+_n = now_pr()
+_today_str = f"{_n:%A, %b} {_n.day}"
 
 st.markdown(f"""
 <div class="hero">

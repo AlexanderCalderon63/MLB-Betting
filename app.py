@@ -22,6 +22,7 @@ from theme import init_theme, palette
 from ui import responsive_table
 from bankroll import require_balance
 from auth import require_login, selected_user_id, user_clause
+from tz import baseball_date, is_on_slate, is_upcoming, now_pr
 
 init_db()
 
@@ -53,7 +54,7 @@ st.sidebar.caption("Not financial advice. Bet responsibly.")
 
 # ── Quick Stats (last 30 days) ─────────────────────────────────────────────────
 
-cutoff_30 = (date.today() - timedelta(days=30)).isoformat()
+cutoff_30 = (baseball_date() - timedelta(days=30)).isoformat()
 conn = get_connection()
 
 real_bets = pd.read_sql(
@@ -91,7 +92,7 @@ pnl_color     = _c["green"] if total_pnl >= 0 else _c["red"]
 roi_color     = _c["green"] if roi >= 0       else _c["red"]
 pending_color = _c["red"]   if n_pending > 0  else _c["muted"]
 
-_today_str = datetime.now().strftime('%B %d, %Y').replace(' 0', ' ')
+_today_str = now_pr().strftime('%B %d, %Y').replace(' 0', ' ')
 st.markdown(f"""
 <div class="hero">
   <div class="hero-main">
@@ -130,19 +131,9 @@ st.subheader("Today's Value Bets")
 def _load_odds_and_stats():
     return fetch_mlb_odds(), get_full_team_stats()
 
-def _is_upcoming_today(commence_time: str, grace: int = 5) -> bool:
-    try:
-        dt_utc    = datetime.fromisoformat(commence_time.replace("Z", "+00:00"))
-        now_utc   = datetime.now(timezone.utc)
-        if dt_utc <= now_utc - timedelta(minutes=grace):
-            return False
-        local_tz  = datetime.now().astimezone().tzinfo
-        dt_local  = dt_utc.astimezone(local_tz)
-        now_local = datetime.now(local_tz)
-        today_start = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
-        return today_start <= dt_local < today_start + timedelta(hours=26)
-    except Exception:
-        return True
+def _is_upcoming_today(commence_time: str) -> bool:
+    # Today's Puerto Rico slate (3 AM rollover), not yet started.
+    return is_on_slate(commence_time, baseball_date()) and is_upcoming(commence_time)
 
 try:
     with st.spinner("Loading today's odds..."):
@@ -191,7 +182,7 @@ else:
         n_total = len(enriched)
         n_value = len(value_games)
 
-        st.caption(f"{n_total} game(s) today · **{n_value}** with 4%+ edge · Head to **Today's Games** for full detail and pitcher data")
+        st.caption(f"{n_total} game(s) today · **{n_value}** with 4%+ edge · Head to **Games & Sizing** for full detail and pitcher data")
 
         if not value_games:
             st.info("No games cross the 4% edge threshold today.")
@@ -282,4 +273,4 @@ if n_pending > 0:
         disp_p.columns = ["Date", "Away", "Home", "Bet On", "Odds", "Stake ($)"]
         responsive_table(disp_p, key="home_pending_paper", numeric_cols=["Odds", "Stake ($)"])
 
-st.caption("⚠️ Model uses season-level stats only — pitcher data on Today's Games page. Not financial advice. Gamble responsibly.")
+st.caption("⚠️ Model uses season-level stats only — pitcher data on the Games & Sizing page. Not financial advice. Gamble responsibly.")

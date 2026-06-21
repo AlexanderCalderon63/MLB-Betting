@@ -11,3 +11,6 @@ SQLAlchemy==2.0.30
 python-dotenv==1.0.1
 anthropic>=0.99.0
 psycopg2-binary>=2.9.9
+# Pinned: 0.1.80+ requires streamlit>=1.40.1, which conflicts with the pinned
+# streamlit==1.35.0. 0.1.71 needs only streamlit>=1.18 (works on 1.35 and 1.56+).
+extra-streamlit-components==0.1.71
