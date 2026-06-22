@@ -137,9 +137,9 @@ with st.expander("📥 Refresh Closing Odds", expanded=False):
                 f"using {result['api_calls']} API call(s)."
             )
             if result["errors"]:
-                with st.expander(f"⚠️ {len(result['errors'])} warning(s)", expanded=False):
-                    for e in result["errors"]:
-                        st.caption(e)
+                st.warning(f"⚠️ {len(result['errors'])} warning(s)")
+                for e in result["errors"]:
+                    st.caption(e)
 
 # --- Update Outcomes ---
 with st.expander("✏️ Update Bet Outcomes", expanded=False):
