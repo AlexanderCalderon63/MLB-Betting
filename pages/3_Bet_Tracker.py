@@ -16,6 +16,7 @@ from theme import init_theme, palette
 from ui import responsive_chart, responsive_table
 from bankroll import require_balance, get_balance_state, render_balance_card
 from bet_analytics import roi_breakdown, signal_tier, calibration, TIER_ORDER
+from bet_charts import render_signal_performance
 from auth import require_login, selected_user_id, current_user_id, user_clause, owner_clause
 from tz import baseball_date
 
@@ -448,3 +449,6 @@ if not completed.empty:
                          numeric_cols=["Bets", "Predicted Win%", "Actual Win%"])
     else:
         st.caption("📉 Calibration unlocks after 10+ settled Win/Loss bets.")
+
+    # --- Signal Performance — Pareto by team, reliability, heatmap, leaderboard ---
+    render_signal_performance(completed, key_prefix="bt", scope_label="bets")
