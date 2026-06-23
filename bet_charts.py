@@ -235,27 +235,16 @@ def render_signal_performance(completed: pd.DataFrame, *, key_prefix: str,
                 continue
             responsive_chart(pareto_figure(par, tier, c), key=f"{key_prefix}_pareto_{tier[:3]}")
 
-    # 3 ── Heatmap: the cross-signal companion to the Pareto charts
+    # 3 ── Heatmap: the cross-signal companion to the Pareto charts (all teams)
     mat = team_signal_matrix(completed)
     if not mat.empty:
-        TOP = 15
-        shown = list(dict.fromkeys(mat["Team"]))[:TOP]
         st.markdown("**Win-rate grid** — every backed team across all three signals at once.")
-        responsive_chart(heatmap_figure(mat[mat["Team"].isin(shown)], c, list(SIGNAL_TIERS)),
-                         key=f"{key_prefix}_heatmap")
-        if len(set(mat["Team"])) > TOP:
-            st.caption(f"Showing your {TOP} most-bet teams. Green = winning the signal, red = losing it.")
-        else:
-            st.caption("Green = you're winning that signal for that team · red = losing it · number = bets.")
+        responsive_chart(heatmap_figure(mat, c, list(SIGNAL_TIERS)), key=f"{key_prefix}_heatmap")
+        st.caption("Green = you're winning that signal for that team · red = losing it · number = bets.")
 
-    # 4 ── Leaderboard: where the money actually came from
+    # 4 ── Leaderboard: where the money actually came from (all teams)
     lb = team_leaderboard(completed)
     if not lb.empty:
-        if len(lb) > 16:
-            lb = pd.concat([lb.head(8), lb.tail(8)])
-            cap = "Top 8 and bottom 8 teams by net P&L."
-        else:
-            cap = "Every backed team by net P&L — green made money, red lost it."
         st.markdown("**Team profit leaderboard** — lean into the green, fade the red.")
         responsive_chart(leaderboard_figure(lb, c), key=f"{key_prefix}_leaderboard", expandable=False)
-        st.caption(cap)
+        st.caption("Every backed team by net P&L — green made money, red lost it.")
