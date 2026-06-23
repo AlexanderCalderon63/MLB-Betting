@@ -14,6 +14,7 @@ from ingestion.auto_resolver import batch_resolve_bets, refresh_closing_odds, _l
 from theme import init_theme, palette
 from ui import responsive_chart, responsive_table
 from bet_analytics import roi_breakdown, signal_tier, calibration, TIER_ORDER
+from bet_charts import render_signal_performance
 from auth import require_login, selected_user_id, current_user_id, user_clause, owner_clause
 from tz import baseball_date
 
@@ -431,3 +432,6 @@ if not completed.empty:
                          numeric_cols=["Bets", "Predicted Win%", "Actual Win%"])
     else:
         st.caption("📉 Calibration unlocks after 10+ settled Win/Loss bets.")
+
+    # --- Signal Performance — Pareto by team, reliability, heatmap, leaderboard ---
+    render_signal_performance(completed, key_prefix="pbt", scope_label="paper bets")

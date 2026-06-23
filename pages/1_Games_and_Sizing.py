@@ -26,6 +26,7 @@ from database import init_db, get_connection
 from theme import init_theme, palette
 from bankroll import require_balance, get_balance_state, recommend_daily_budget, RISK_LEVELS, DEFAULT_RISK
 from auth import require_login, current_user_id
+from bet_analytics import signal_tier, SIGNAL_TIERS
 from ingestion.park_weather import park_factor_badge, weather_badges, get_weather
 from tz import baseball_date, is_on_slate, is_upcoming, to_pr, game_slate_date
 
@@ -1243,6 +1244,49 @@ def _l10_color(record: str) -> str:
         pass
     return c["muted"]
 
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _load_signal_history(uid):
+    """Per-(team, signal-tier) record over this user's settled real + paper bets,
+    pooled (reqs 1.5.1, 1.6). Returns {(team_lower, tier): (wins, n)} so each game
+    can show 'you've won X% when this team carried this signal'. Cached 5 min — the
+    note is a glance, not a live counter, and this keeps the slate render snappy."""
+    if uid is None:
+        return {}
+    conn = get_connection()
+    rows = []
+    for tbl in ("bets", "paper_bets"):
+        rows += conn.execute(
+            f"SELECT bet_on, model_prob, implied_prob, outcome FROM {tbl} "
+            f"WHERE user_id = ? AND outcome IN ('Win','Loss','Push','Cashout')",
+            (uid,),
+        ).fetchall()
+    conn.close()
+    hist: dict = {}
+    for r in rows:
+        mp, ip = r["model_prob"], r["implied_prob"]
+        if mp is None or ip is None:
+            continue
+        tier = signal_tier(mp - ip)
+        if tier is None:
+            continue
+        key = (str(r["bet_on"]).strip().lower(), tier)
+        wins, n = hist.get(key, (0, 0))
+        hist[key] = (wins + (1 if r["outcome"] == "Win" else 0), n + 1)
+    return hist
+
+
+def _headline_pick(e):
+    """(team, edge) for the side a game leads with — mirrors the odds-table logic."""
+    if e["away_has_value"] and (not e["home_has_value"] or e["away_edge"] >= e["home_edge"]):
+        return e["away_team"], e["away_edge"]
+    if e["home_has_value"]:
+        return e["home_team"], e["home_edge"]
+    return (e["home_team"], e["home_edge"]) if e["home_edge"] >= e["away_edge"] else (e["away_team"], e["away_edge"])
+
+
+_sig_hist = _load_signal_history(current_user_id())
+
 for base_id, entries in sorted_games:
     sample    = entries[0]
     best_edge = game_best_edge(entries)
@@ -1374,6 +1418,28 @@ for base_id, entries in sorted_games:
         + "</tbody></table></div>",
         unsafe_allow_html=True,
     )
+
+    # Your track record on this game's headline pick at its signal tier (req 1.5).
+    _pick_team, _pick_edge = _headline_pick(sample)
+    _pick_tier = signal_tier(_pick_edge)
+    if _pick_tier in SIGNAL_TIERS:
+        _tcol  = c["amber"] if _pick_tier.startswith("🔥") else c["green"] if _pick_tier.startswith("✅") else c["accent"]
+        _short = _pick_tier.split(" (")[0]
+        _wins, _n = _sig_hist.get((_pick_team.strip().lower(), _pick_tier), (0, 0))
+        if _n > 0:
+            _body = (f'<strong style="color:{_tcol};">{_wins / _n * 100:.0f}%</strong> win rate '
+                     f'<span style="color:{c["muted"]};">({_wins}–{_n - _wins} · {_n} settled)</span>')
+        else:
+            _body = f'<span style="color:{c["muted"]};">no settled bets yet — this would be your first</span>'
+        st.markdown(
+            f'<div style="display:inline-flex;align-items:center;gap:9px;flex-wrap:wrap;'
+            f'margin:9px 0 2px;padding:6px 13px;border-radius:999px;'
+            f'background:{_tcol}14;border:1px solid {_tcol}33;font-size:0.82rem;color:{c["text2"]};">'
+            f'<span style="font-family:\'Space Mono\',monospace;font-size:0.68rem;font-weight:700;'
+            f'letter-spacing:0.05em;text-transform:uppercase;color:{_tcol};">📊 {_short} record</span>'
+            f'<span><strong>{html.escape(_pick_team)}</strong> · {_body}</span></div>',
+            unsafe_allow_html=True,
+        )
 
     # Bet slip buttons
     real_in  = base_id in st.session_state["real_slip"]
